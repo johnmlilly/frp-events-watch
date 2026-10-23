@@ -3,7 +3,6 @@
 [![FRP events watch](https://github.com/johnmlilly/frp-events-watch/actions/workflows/events-watch.yml/badge.svg)](https://github.com/johnmlilly/frp-events-watch/actions/workflows/events-watch.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-scheduled-2088FF?logo=githubactions&logoColor=white)
-![Cloudflare](https://img.shields.io/badge/Cloudflare-WAF%20skip%20rule-F38020?logo=cloudflare&logoColor=white)
 ![WordPress](https://img.shields.io/badge/WordPress-The%20Events%20Calendar-21759B?logo=wordpress&logoColor=white)
 ![Resend](https://img.shields.io/badge/email-Resend-000000?logo=resend&logoColor=white)
 
