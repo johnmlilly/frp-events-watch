@@ -21,8 +21,7 @@ PAGES = ["/", "/community/", "/families/", "/lcm/", "/lcw/", "/lgw/",
          "/thewayoftrust/", "/prayer/", "/courses/", "/gsc/"]
 SOON_HOURS = int(os.getenv("SOON_HOURS", "24"))
 PAST_LOOKBACK_DAYS = 14
-UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-      "Accept": "application/json, text/html;q=0.9, */*;q=0.8", "Accept-Language": "en-US,en;q=0.9"}
+UA = {"User-Agent": "frp-events-watch/1.0"}
 
 
 def norm(s: str) -> str:
@@ -49,7 +48,7 @@ def fetch_events(now: datetime) -> list[dict]:
     while url:
         r = requests.get(url, params=params, headers=UA, timeout=30)
         if not r.ok:
-            print(r.status_code, dict(r.headers), r.text[:500], sep="\n", file=sys.stderr)
+            print(r.status_code, r.headers.get("Cf-Mitigated"), file=sys.stderr)
         r.raise_for_status()
         data = r.json()
         for e in data.get("events", []):
