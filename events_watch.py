@@ -21,7 +21,7 @@ PAGES = ["/", "/community/", "/families/", "/lcm/", "/lcw/", "/lgw/",
          "/thewayoftrust/", "/prayer/", "/courses/", "/gsc/"]
 SOON_HOURS = int(os.getenv("SOON_HOURS", "24"))
 PAST_LOOKBACK_DAYS = 14
-UA = {"User-Agent": "frp-events-watch/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; frp-events-watch/1.0; +https://github.com/johnmlilly/frp-events-watch)"}
 
 
 def norm(s: str) -> str:
