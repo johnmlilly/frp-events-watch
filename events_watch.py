@@ -10,6 +10,7 @@ import html
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -22,6 +23,9 @@ PAGES = ["/", "/community/", "/families/", "/lcm/", "/lcw/", "/lgw/",
 SOON_HOURS = int(os.getenv("SOON_HOURS", "24"))
 PAST_LOOKBACK_DAYS = 14
 UA = {"User-Agent": "frp-events-watch/1.0"}
+# Shared secret that a Cloudflare WAF skip rule on the site matches on.
+if os.getenv("FRP_WATCH_TOKEN"):
+    UA["X-FRP-Watch"] = os.environ["FRP_WATCH_TOKEN"]
 
 
 def norm(s: str) -> str:
@@ -38,6 +42,14 @@ def parse_utc(s: str | None) -> datetime | None:
     return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 
+def get(url, **kw):
+    for attempt in range(3):
+        r = requests.get(url, headers=UA, timeout=30, **kw)
+        if r.status_code < 500 or attempt == 2:
+            return r
+        time.sleep(2 ** attempt)
+
+
 def fetch_events(now: datetime) -> list[dict]:
     params = {
         "per_page": 50,
@@ -46,7 +58,7 @@ def fetch_events(now: datetime) -> list[dict]:
     }
     url, events = API, []
     while url:
-        r = requests.get(url, params=params, headers=UA, timeout=30)
+        r = get(url, params=params)
         if not r.ok:
             print(r.status_code, r.headers.get("Cf-Mitigated"), file=sys.stderr)
         r.raise_for_status()
@@ -65,7 +77,7 @@ def fetch_pages() -> tuple[dict[str, str], list[str]]:
     pages, errors = {}, []
     for path in PAGES:
         try:
-            r = requests.get(SITE + path, headers=UA, timeout=30)
+            r = get(SITE + path)
             r.raise_for_status()
             pages[path] = r.text
         except requests.RequestException as ex:
