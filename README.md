@@ -13,7 +13,23 @@ Daily check of the [Family Renewal Project](https://www.familyrenewalproject.com
 
 It only reports. It never edits WordPress.
 
-## How it works
+There are two versions that do the same check:
+
+| | Python script | WordPress plugin |
+|---|---|---|
+| Where it runs | GitHub Actions (or any machine) | Inside the WordPress site, on WP-Cron |
+| Needs | Nothing installed on the site | WP admin access to install a plugin |
+| Cloudflare / bot protection | Can be blocked (e.g. Bot Fight Mode challenges GitHub runners) | Not affected; it never makes web requests to the site |
+| Email | Resend API | Resend API, or the site's normal `wp_mail` |
+
+Use the plugin when the site sits behind bot protection you can't relax. Use the script when you can't install plugins.
+
+
+## Python script
+
+Source: [`events_watch.py`](events_watch.py).
+
+### How it works
 
 1. Pulls events from The Events Calendar REST API (`/wp-json/tribe/events/v1/events`).
 2. Fetches the pages listed in `PAGES` and looks for each event by its URL slug or title.
@@ -21,7 +37,7 @@ It only reports. It never edits WordPress.
 
 A GitHub Actions workflow runs it daily at 12:00 UTC, and you can also trigger it manually from the Actions tab.
 
-## Run locally
+### Run locally
 
 ```
 python3 -m venv .venv && .venv/bin/pip install requests
@@ -30,9 +46,46 @@ python3 -m venv .venv && .venv/bin/pip install requests
 
 `--dry-run` prints the report without sending email. Local runs only get through Cloudflare from IPs it doesn't challenge, or with `FRP_WATCH_TOKEN` set in your environment.
 
-## Customize
+### Customize
 
 - **Pages to scan:** edit `PAGES` in `events_watch.py`.
 - **Schedule:** edit the `cron` line in `.github/workflows/events-watch.yml`.
 - **Lookback for past events:** `PAST_LOOKBACK_DAYS` in `events_watch.py`.
 
+## WordPress plugin
+
+Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
+
+### How it works
+
+1. Reads events straight from The Events Calendar (no REST API calls).
+2. Loads each page in `FRP_WATCH_PAGES` from the database (content plus page-builder data) and looks for each event by its URL slug or title.
+3. Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. If there's nothing to report, it sends nothing.
+
+It runs daily at 12:00 UTC on WP-Cron, which fires on the first site visit after that time.
+
+Limitation: it checks page content only, not headers, footers, sidebars or menus.
+
+### Install
+
+1. Zip the plugin folder:
+   ```
+   mkdir -p dist/frp-events-watch && cp wordpress/frp-events-watch.php dist/frp-events-watch/
+   (cd dist && zip -r frp-events-watch.zip frp-events-watch)
+   ```
+2. In WP admin: **Plugins → Add New → Upload Plugin**, upload the zip, and activate it. To update later, upload again and choose **Replace current with uploaded**.
+
+### Settings (Tools → FRP Events Watch)
+
+- **Send reports to:** recipient. Falls back to the site admin email.
+- **Resend API key:** optional. When set, only this plugin's mail goes through Resend; the rest of the site's mail is untouched. Use a dedicated key, since other admins can read it from the database.
+- **From address:** must be on a domain verified in Resend. Blank uses `onboarding@resend.dev`, which only delivers to your Resend account's email.
+- **Send test email** always sends. **Send report now** sends the current report. The page also shows a preview and the next scheduled run.
+
+### Customize
+
+Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`.
+
+### Reuse on another site
+
+Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you install both copies on one site, also rename `FRP_WATCH_HOOK`, the `frp_watch_` function prefix and option names so they don't collide. The site needs The Events Calendar.
