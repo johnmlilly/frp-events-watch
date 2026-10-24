@@ -6,7 +6,8 @@
  * Requires PHP: 7.4
  *
  * Port of events_watch.py that runs inside WordPress, so Cloudflare is never involved.
- * Recipient, preview and manual send: Tools > FRP Events Watch.
+ * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
+ * With a Resend API key set, mail goes through Resend's API; otherwise through wp_mail.
  */
 
 defined('ABSPATH') || exit;
@@ -182,6 +183,25 @@ function frp_watch_recipient() {
     return get_option('frp_watch_mail_to') ?: get_option('admin_email');
 }
 
+/** @return true|string true on success, otherwise an error message */
+function frp_watch_mail($to, $subject, $body) {
+    $key = get_option('frp_watch_resend_key');
+    if (!$key) {
+        return wp_mail($to, $subject, $body) ?: 'wp_mail failed';
+    }
+    $r = wp_remote_post('https://api.resend.com/emails', [
+        'timeout' => 30,
+        'headers' => ['Authorization' => "Bearer $key", 'Content-Type' => 'application/json'],
+        'body' => wp_json_encode(['from' => get_option('frp_watch_mail_from') ?: 'onboarding@resend.dev',
+                                  'to' => [$to], 'subject' => $subject, 'text' => $body]),
+    ]);
+    if (is_wp_error($r)) {
+        return 'Resend request failed: ' . $r->get_error_message();
+    }
+    $code = wp_remote_retrieve_response_code($r);
+    return $code >= 200 && $code < 300 ?: "Resend returned $code: " . wp_remote_retrieve_body($r);
+}
+
 /** @return string what happened, for the admin page */
 function frp_watch_run($send) {
     $report = frp_watch_report(time());
@@ -191,8 +211,8 @@ function frp_watch_run($send) {
     [$subject, $body] = $report;
     if ($send) {
         $to = frp_watch_recipient();
-        $ok = wp_mail($to, $subject, $body);
-        $subject = ($ok ? "Sent to $to" : "wp_mail failed sending to $to") . "\n\n$subject";
+        $ok = frp_watch_mail($to, $subject, $body);
+        $subject = ($ok === true ? "Sent to $to" : "Failed sending to $to: $ok") . "\n\n$subject";
     }
     return "$subject\n\n$body";
 }
@@ -201,21 +221,27 @@ add_action('admin_menu', function () {
     add_management_page('FRP Events Watch', 'FRP Events Watch', 'manage_options', 'frp-events-watch', function () {
         $notice = '';
         if (isset($_POST['frp_watch_save']) && check_admin_referer('frp_watch')) {
-            $email = sanitize_email(wp_unslash($_POST['frp_watch_mail_to'] ?? ''));
-            if ($email && is_email($email)) {
-                update_option('frp_watch_mail_to', $email);
-                $notice = "Saved. Reports will go to $email.";
-            } else {
-                $notice = 'That is not a valid email address.';
+            $to = sanitize_email(wp_unslash($_POST['frp_watch_mail_to'] ?? ''));
+            $from = sanitize_text_field(wp_unslash($_POST['frp_watch_mail_from'] ?? ''));
+            $key = sanitize_text_field(wp_unslash($_POST['frp_watch_resend_key'] ?? ''));
+            update_option('frp_watch_mail_to', $to, false);
+            update_option('frp_watch_mail_from', $from, false);
+            // Blank keeps the saved key; the remove box clears it.
+            if (!empty($_POST['frp_watch_resend_clear'])) {
+                delete_option('frp_watch_resend_key');
+            } elseif ($key) {
+                update_option('frp_watch_resend_key', $key, false);
             }
+            $notice = 'Saved. Reports will go to ' . frp_watch_recipient() . '.';
         }
         if (isset($_POST['frp_watch_test']) && check_admin_referer('frp_watch')) {
             $to = frp_watch_recipient();
-            $ok = wp_mail($to, 'FRP events watch: test', 'Test email from the FRP Events Watch plugin. Delivery works.');
-            $notice = $ok ? "Test email sent to $to. Check spam if it doesn't arrive." : "wp_mail failed sending to $to.";
+            $ok = frp_watch_mail($to, 'FRP events watch: test', 'Test email from the FRP Events Watch plugin. Delivery works.');
+            $notice = $ok === true ? "Test email sent to $to. Check spam if it doesn't arrive." : "Failed sending to $to: $ok";
         }
         $send = isset($_POST['frp_watch_send']) && check_admin_referer('frp_watch');
         $next = wp_next_scheduled(FRP_WATCH_HOOK);
+        $saved_key = get_option('frp_watch_resend_key');
         ?>
         <div class="wrap">
             <h1>FRP Events Watch</h1>
@@ -229,8 +255,22 @@ add_action('admin_menu', function () {
                     <input type="email" class="regular-text" id="frp_watch_mail_to" name="frp_watch_mail_to"
                            value="<?php echo esc_attr(get_option('frp_watch_mail_to', '')); ?>"
                            placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
-                    <?php submit_button('Save', 'primary', 'frp_watch_save', false); ?>
                 </p>
+                <p>
+                    <label for="frp_watch_resend_key">Resend API key (optional; without it, the site's normal mail is used)</label><br>
+                    <input type="password" class="regular-text" id="frp_watch_resend_key" name="frp_watch_resend_key"
+                           autocomplete="off" placeholder="<?php echo $saved_key ? esc_attr('Saved, ends in ' . substr($saved_key, -4)) : 're_...'; ?>">
+                    <?php if ($saved_key) : ?>
+                        <label><input type="checkbox" name="frp_watch_resend_clear" value="1"> Remove</label>
+                    <?php endif; ?>
+                </p>
+                <p>
+                    <label for="frp_watch_mail_from">From address for Resend (must be on a domain verified in Resend)</label><br>
+                    <input type="text" class="regular-text" id="frp_watch_mail_from" name="frp_watch_mail_from"
+                           value="<?php echo esc_attr(get_option('frp_watch_mail_from', '')); ?>"
+                           placeholder="onboarding@resend.dev">
+                </p>
+                <p><?php submit_button('Save', 'primary', 'frp_watch_save', false); ?></p>
                 <p>Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?></p>
                 <p>
                     <?php submit_button('Send test email', 'secondary', 'frp_watch_test', false); ?>
