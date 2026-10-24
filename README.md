@@ -31,11 +31,12 @@ Source: [`events_watch.py`](events_watch.py).
 
 ### How it works
 
-1. Pulls events from The Events Calendar REST API (`/wp-json/tribe/events/v1/events`).
-2. Fetches the pages listed in `PAGES` and looks for each event by its URL slug or title.
-3. Emails a summary through [Resend](https://resend.com). If there's nothing to report, it sends nothing.
-
-A GitHub Actions workflow runs it daily at 12:00 UTC, and you can also trigger it manually from the Actions tab.
+| Step | What happens |
+|---|---|
+| 1. Get events | Pulls events from The Events Calendar REST API (`/wp-json/tribe/events/v1/events`). |
+| 2. Scan pages | Fetches the pages listed in `PAGES` and looks for each event by its URL slug or title. |
+| 3. Email | Emails a summary through [Resend](https://resend.com). If there's nothing to report, it sends nothing. |
+| Schedule | GitHub Actions, daily at 12:00 UTC. Can also be run manually from the Actions tab. |
 
 ### Run locally
 
@@ -58,11 +59,12 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 
 ### How it works
 
-1. Reads events straight from The Events Calendar (no REST API calls).
-2. Loads each page in `FRP_WATCH_PAGES` from the database (content plus page-builder data) and looks for each event by its URL slug or title.
-3. Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. If there's nothing to report, it sends nothing.
-
-It runs daily at 12:00 UTC on WP-Cron, which fires on the first site visit after that time.
+| Step | What happens |
+|---|---|
+| 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
+| 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus page-builder data) and looks for each event by its URL slug or title. |
+| 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. If there's nothing to report, it sends nothing. |
+| Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 
 Limitation: it checks page content only, not headers, footers, sidebars or menus.
 
