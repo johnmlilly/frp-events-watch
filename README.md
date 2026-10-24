@@ -36,6 +36,7 @@ Source: [`events_watch.py`](events_watch.py).
 | 1. Get events | Pulls events from The Events Calendar REST API (`/wp-json/tribe/events/v1/events`). |
 | 2. Scan pages | Fetches the pages listed in `PAGES` and looks for each event by its URL slug or title. |
 | 3. Email | Emails a summary through [Resend](https://resend.com). If there's nothing to report, it sends nothing. |
+| Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. `--html out.html` saves a copy to look at. |
 | Schedule | GitHub Actions, daily at 12:00 UTC. Can also be run manually from the Actions tab. |
 
 ### Run locally
@@ -64,6 +65,7 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
 | 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus page-builder data) and looks for each event by its URL slug or title. |
 | 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. If there's nothing to report, it sends nothing. |
+| Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. The Tools page previews both. |
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
