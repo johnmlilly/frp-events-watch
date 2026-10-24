@@ -6,8 +6,7 @@
  * Requires PHP: 7.4
  *
  * Port of events_watch.py that runs inside WordPress, so Cloudflare is never involved.
- * Preview and manual send: Tools > FRP Events Watch.
- * Recipient: define FRP_WATCH_MAIL_TO in wp-config.php, otherwise the site admin email.
+ * Recipient, preview and manual send: Tools > FRP Events Watch.
  */
 
 defined('ABSPATH') || exit;
@@ -179,6 +178,10 @@ function frp_watch_report($now) {
     return ['FRP events: ' . count($soon) . " soon, $stale past still live", implode("\n", $lines)];
 }
 
+function frp_watch_recipient() {
+    return get_option('frp_watch_mail_to') ?: get_option('admin_email');
+}
+
 /** @return string what happened, for the admin page */
 function frp_watch_run($send) {
     $report = frp_watch_report(time());
@@ -187,7 +190,7 @@ function frp_watch_run($send) {
     }
     [$subject, $body] = $report;
     if ($send) {
-        $to = defined('FRP_WATCH_MAIL_TO') ? FRP_WATCH_MAIL_TO : get_option('admin_email');
+        $to = frp_watch_recipient();
         $ok = wp_mail($to, $subject, $body);
         $subject = ($ok ? "Sent to $to" : "wp_mail failed sending to $to") . "\n\n$subject";
     }
@@ -196,15 +199,43 @@ function frp_watch_run($send) {
 
 add_action('admin_menu', function () {
     add_management_page('FRP Events Watch', 'FRP Events Watch', 'manage_options', 'frp-events-watch', function () {
-        $send = isset($_POST['frp_watch_send']) && check_admin_referer('frp_watch_send');
+        $notice = '';
+        if (isset($_POST['frp_watch_save']) && check_admin_referer('frp_watch')) {
+            $email = sanitize_email(wp_unslash($_POST['frp_watch_mail_to'] ?? ''));
+            if ($email && is_email($email)) {
+                update_option('frp_watch_mail_to', $email);
+                $notice = "Saved. Reports will go to $email.";
+            } else {
+                $notice = 'That is not a valid email address.';
+            }
+        }
+        if (isset($_POST['frp_watch_test']) && check_admin_referer('frp_watch')) {
+            $to = frp_watch_recipient();
+            $ok = wp_mail($to, 'FRP events watch: test', 'Test email from the FRP Events Watch plugin. Delivery works.');
+            $notice = $ok ? "Test email sent to $to. Check spam if it doesn't arrive." : "wp_mail failed sending to $to.";
+        }
+        $send = isset($_POST['frp_watch_send']) && check_admin_referer('frp_watch');
         $next = wp_next_scheduled(FRP_WATCH_HOOK);
         ?>
         <div class="wrap">
             <h1>FRP Events Watch</h1>
-            <p>Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?></p>
+            <?php if ($notice) : ?>
+                <div class="notice notice-info"><p><?php echo esc_html($notice); ?></p></div>
+            <?php endif; ?>
             <form method="post">
-                <?php wp_nonce_field('frp_watch_send'); ?>
-                <?php submit_button('Send email now', 'secondary', 'frp_watch_send', false); ?>
+                <?php wp_nonce_field('frp_watch'); ?>
+                <p>
+                    <label for="frp_watch_mail_to">Send reports to</label><br>
+                    <input type="email" class="regular-text" id="frp_watch_mail_to" name="frp_watch_mail_to"
+                           value="<?php echo esc_attr(get_option('frp_watch_mail_to', '')); ?>"
+                           placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
+                    <?php submit_button('Save', 'primary', 'frp_watch_save', false); ?>
+                </p>
+                <p>Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?></p>
+                <p>
+                    <?php submit_button('Send test email', 'secondary', 'frp_watch_test', false); ?>
+                    <?php submit_button('Send report now', 'secondary', 'frp_watch_send', false); ?>
+                </p>
             </form>
             <h2><?php echo $send ? 'Result' : 'Preview (not sent)'; ?></h2>
             <pre style="white-space:pre-wrap"><?php echo esc_html(frp_watch_run($send)); ?></pre>
