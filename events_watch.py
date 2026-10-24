@@ -2,7 +2,7 @@
 """Flag FRP events starting soon or already past, and list site pages that still mention them.
 
 Env: RESEND_API_KEY, MAIL_TO (required unless --dry-run); MAIL_FROM, SOON_HOURS (optional).
-Usage: python events_watch.py [--dry-run]
+Usage: python events_watch.py [--dry-run] [--html out.html]
 """
 from __future__ import annotations
 
@@ -96,43 +96,101 @@ def classify(events: list[dict], now: datetime):
     return sorted(soon, key=lambda e: e["start"]), sorted(past, key=lambda e: e["end"])
 
 
-def build_report(soon, past, pages, errors) -> tuple[str, str] | None:
-    where = lambda e: [p for p, h in pages.items() if mentions(e, h)]
-    lines, n_soon, n_stale = [], 0, 0
+def build_report(soon, past, pages, errors, now) -> dict | None:
+    """Sections for render_text/render_html. Event items: title, url, when, pages {path: url}."""
+    where = lambda e: {p: SITE + p for p, h in pages.items() if mentions(e, h)}
+    sections = []
 
-    if soon:
-        lines.append(f"STARTING WITHIN {SOON_HOURS}h")
-        for e in soon:
-            n_soon += 1
-            hits = where(e)
-            lines += [f"- {e['title']} ({e['start']:%a %b %d %H:%M} UTC)", f"  {e['url']}",
-                      f"  On: {', '.join(hits) if hits else 'not found on scanned pages'}"]
-        lines.append("")
+    items = [{"title": e["title"], "url": e["url"], "when": f"{e['start']:%a %b %d %H:%M} UTC",
+              "pages": where(e)} for e in soon]
+    if items:
+        sections.append({"key": "soon", "title": f"Starting within {SOON_HOURS} hours", "items": items})
+    n_soon = len(items)
 
-    stale = [(e, where(e)) for e in past]
-    stale = [(e, h) for e, h in stale if h]
-    if stale:
-        lines.append("PAST BUT STILL ON SITE")
-        for e, hits in stale:
-            n_stale += 1
-            lines += [f"- {e['title']} (ended {e['end']:%a %b %d} UTC)", f"  {e['url']}",
-                      f"  On: {', '.join(hits)}"]
-        lines.append("")
-
-    if errors:
-        lines += ["PAGES THAT FAILED TO LOAD"] + [f"- {x}" for x in errors]
+    items = [{"title": e["title"], "url": e["url"], "when": f"ended {e['end']:%a %b %d} UTC", "pages": hits}
+             for e in past if (hits := where(e))]
+    if items:
+        sections.append({"key": "stale", "title": "Past but still on site", "items": items})
+    n_stale = len(items)
 
     if not (n_soon or n_stale):
         return None
-    return f"FRP events: {n_soon} soon, {n_stale} past still live", "\n".join(lines)
+    if errors:
+        sections.append({"key": "errors", "title": "Pages that failed to load", "items": errors})
+    return {"subject": f"FRP events: {n_soon} soon, {n_stale} past still live",
+            "summary": f"{n_soon} starting soon · {n_stale} past {'event' if n_stale == 1 else 'events'} still on the site",
+            "date": f"{now:%A, %B %d, %Y}", "sections": sections}
 
 
-def send_email(subject: str, body: str) -> None:
+def render_text(report: dict) -> str:
+    lines = []
+    for s in report["sections"]:
+        lines.append(s["title"].upper())
+        for item in s["items"]:
+            if s["key"] == "errors":
+                lines.append(f"- {item}")
+                continue
+            lines += [f"- {item['title']} ({item['when']})", f"  {item['url']}",
+                      f"  On: {', '.join(item['pages']) or 'not found on scanned pages'}"]
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def render_html(report: dict, footer_url: str | None = None) -> str:
+    """Email-safe HTML: tables and inline styles only. Keep in step with frp_watch_render_html() in the plugin."""
+    accent = {"soon": "#2563eb", "stale": "#d97706", "errors": "#6b7280"}
+    font = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    h = lambda s: html.escape(s, quote=True)
+
+    body = ""
+    for s in report["sections"]:
+        c = accent[s["key"]]
+        body += ('<tr><td style="padding:12px 24px 4px;">'
+                 f'<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:{c};margin-bottom:8px;">'
+                 f'{h(s["title"])}</div>')
+        for item in s["items"]:
+            if s["key"] == "errors":
+                body += f'<div style="font-size:13px;color:#6b7280;margin-bottom:4px;">{h(item)}</div>'
+                continue
+            chips = "".join(
+                f'<a href="{h(url)}" style="display:inline-block;font-size:12px;color:#1f2a44;background:#eef2ff;border-radius:10px;padding:2px 9px;margin:2px 4px 2px 0;text-decoration:none;">{h(path)}</a>'
+                for path, url in item["pages"].items()) or '<span style="color:#9ca3af;">Not on any tracked page</span>'
+            when = item["when"][:1].upper() + item["when"][1:]
+            body += (f'<div style="border-left:4px solid {c};background:#f9fafb;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:10px;">'
+                     f'<a href="{h(item["url"])}" style="font-size:15px;font-weight:600;color:#111827;text-decoration:none;">{h(item["title"])}</a>'
+                     f'<div style="font-size:13px;color:#374151;margin-top:3px;font-weight:600;">{h(when)}</div>'
+                     f'<div style="font-size:13px;color:#374151;margin-top:6px;">On: {chips}</div>'
+                     '</div>')
+        body += "</td></tr>"
+
+    footer = "Sent by FRP Events Watch" + (f' · <a href="{h(footer_url)}" style="color:#6b7280;">Workflow run</a>' if footer_url else "")
+    return ('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{h(report["subject"])}</title></head>'
+            '<body style="margin:0;padding:0;background:#f4f5f7;">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;"><tr><td align="center" style="padding:24px 12px;">'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:8px;font-family:{font};color:#1f2937;">'
+            '<tr><td style="background:#1f2a44;color:#ffffff;padding:20px 24px;border-radius:8px 8px 0 0;">'
+            '<div style="font-size:18px;font-weight:600;">FRP Events Watch</div>'
+            f'<div style="font-size:13px;color:#c7cdd9;margin-top:2px;">{h(report["date"])}</div></td></tr>'
+            f'<tr><td style="padding:20px 24px 4px;font-size:15px;">{h(report["summary"])}</td></tr>'
+            f'{body}'
+            f'<tr><td style="padding:16px 24px 20px;font-size:12px;color:#6b7280;border-top:1px solid #e5e7eb;">{footer}</td></tr>'
+            '</table></td></tr></table></body></html>')
+
+
+def run_url() -> str | None:
+    """Link to this GitHub Actions run, when running there."""
+    if os.getenv("GITHUB_RUN_ID"):
+        return f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+    return None
+
+
+def send_email(subject: str, text: str, html_body: str) -> None:
     r = requests.post(
         "https://api.resend.com/emails",
         headers={**UA, "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}"},
         json={"from": os.getenv("MAIL_FROM", "onboarding@resend.dev"),
-              "to": [os.environ["MAIL_TO"]], "subject": subject, "text": body},
+              "to": [os.environ["MAIL_TO"]], "subject": subject, "text": text, "html": html_body},
         timeout=30,
     )
     r.raise_for_status()
@@ -140,17 +198,21 @@ def send_email(subject: str, body: str) -> None:
 
 def main() -> int:
     dry = "--dry-run" in sys.argv
+    html_out = sys.argv[sys.argv.index("--html") + 1] if "--html" in sys.argv else None
     now = datetime.now(timezone.utc)
     soon, past = classify(fetch_events(now), now)
     pages, errors = fetch_pages()
-    report = build_report(soon, past, pages, errors)
+    report = build_report(soon, past, pages, errors, now)
     if not report:
         print("Nothing to report.")
         return 0
-    subject, body = report
-    print(subject, body, sep="\n\n")
+    text, html_body = render_text(report), render_html(report, run_url())
+    print(report["subject"], text, sep="\n\n")
+    if html_out:
+        with open(html_out, "w", encoding="utf-8") as f:
+            f.write(html_body)
     if not dry:
-        send_email(subject, body)
+        send_email(report["subject"], text, html_body)
     return 0
 
 
