@@ -115,14 +115,28 @@ function frp_watch_mentions($event, $text) {
         || strpos(frp_watch_norm($text), frp_watch_norm($event['title'])) !== false;
 }
 
-/** @return array|null [subject, body], or null when there is nothing to report */
-function frp_watch_report($now) {
+/**
+ * Start of this run's "soon" window: where the last delivered run's window ended, so a late
+ * WP-Cron run neither skips events that started in the gap nor reports any twice.
+ */
+function frp_watch_soon_from($now) {
+    $from = (int) get_option('frp_watch_soon_until');
+    return $from ? max($from, $now - FRP_WATCH_PAST_LOOKBACK_DAYS * DAY_IN_SECONDS) : $now - 1;
+}
+
+/**
+ * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
+ * @return array|null [subject, body, complete], or null when there is nothing to report.
+ *                    complete is false when events could not be read.
+ */
+function frp_watch_report($now, $soon_from) {
     $events = frp_watch_events($now);
     if (is_wp_error($events)) {
-        return ['FRP events watch: error', $events->get_error_message()];
+        return ['FRP events watch: error', $events->get_error_message(), false];
     }
-    $soon = array_filter($events, function ($e) use ($now) {
-        return $e['start'] >= $now && $e['start'] <= $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS;
+    $soon_until = $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS;
+    $soon = array_filter($events, function ($e) use ($now, $soon_from, $soon_until) {
+        return $e['start'] > $soon_from && $e['start'] <= $soon_until && $e['end'] >= $now;
     });
     $past = array_filter($events, function ($e) use ($now) {
         return $e['end'] < $now;
@@ -142,7 +156,8 @@ function frp_watch_report($now) {
         $lines[] = 'STARTING WITHIN ' . FRP_WATCH_SOON_HOURS . 'h';
         foreach ($soon as $e) {
             $hits = $where($e);
-            $lines[] = "- {$e['title']} (" . wp_date('D M j g:ia T', $e['start']) . ')';
+            $when = ($e['start'] < $now ? 'started ' : '') . wp_date('D M j g:ia T', $e['start']);
+            $lines[] = "- {$e['title']} ($when)";
             $lines[] = "  {$e['url']}";
             $lines[] = '  On: ' . ($hits ? implode(', ', $hits) : 'not found on scanned pages');
         }
@@ -176,7 +191,7 @@ function frp_watch_report($now) {
     if (!$soon && !$stale) {
         return null;
     }
-    return ['FRP events: ' . count($soon) . " soon, $stale past still live", implode("\n", $lines)];
+    return ['FRP events: ' . count($soon) . " soon, $stale past still live", implode("\n", $lines), true];
 }
 
 function frp_watch_recipient() {
@@ -202,19 +217,28 @@ function frp_watch_mail($to, $subject, $body) {
     return $code >= 200 && $code < 300 ?: "Resend returned $code: " . wp_remote_retrieve_body($r);
 }
 
-/** @return string what happened, for the admin page */
+/**
+ * Previews never move the soon window. A send moves it forward only once the report is
+ * delivered (or there was nothing to report), so a failed run is retried next time.
+ * @return string what happened, for the admin page
+ */
 function frp_watch_run($send) {
-    $report = frp_watch_report(time());
-    if (!$report) {
-        return 'Nothing to report.';
+    $now = time();
+    $report = frp_watch_report($now, frp_watch_soon_from($now));
+    $done = !$report;
+    if ($report) {
+        [$subject, $body, $complete] = $report;
+        if ($send) {
+            $to = frp_watch_recipient();
+            $ok = frp_watch_mail($to, $subject, $body);
+            $done = $ok === true && $complete;
+            $subject = ($ok === true ? "Sent to $to" : "Failed sending to $to: $ok") . "\n\n$subject";
+        }
     }
-    [$subject, $body] = $report;
-    if ($send) {
-        $to = frp_watch_recipient();
-        $ok = frp_watch_mail($to, $subject, $body);
-        $subject = ($ok === true ? "Sent to $to" : "Failed sending to $to: $ok") . "\n\n$subject";
+    if ($send && $done) {
+        update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
     }
-    return "$subject\n\n$body";
+    return $report ? "$subject\n\n$body" : 'Nothing to report.';
 }
 
 add_action('admin_menu', function () {
