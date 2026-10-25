@@ -30,7 +30,8 @@ add_action('init', function () {
     }
 });
 add_action(FRP_WATCH_HOOK, function () {
-    frp_watch_run(true);
+    $run = frp_watch_run(true);
+    update_option('frp_watch_last_run', ['time' => time(), 'status' => $run['status']], false);
 });
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook(FRP_WATCH_HOOK);
@@ -126,8 +127,8 @@ function frp_watch_soon_from($now) {
 
 /**
  * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
- * @return array|null ['subject', 'summary', 'sections', 'complete'], or null when there is nothing
- *                    to report. complete is false when events could not be read.
+ * @return array ['subject', 'summary', 'sections', 'quiet', 'complete']. quiet is true when there is
+ *               nothing to report; complete is false when events could not be read.
  *                    Each section: ['key' => soon|stale|errors, 'title', 'items']; event items are
  *                    ['title', 'url', 'when', 'in_progress', 'pages' => [path => url]], error items
  *                    are strings.
@@ -135,7 +136,7 @@ function frp_watch_soon_from($now) {
 function frp_watch_report($now, $soon_from) {
     $events = frp_watch_events($now);
     if (is_wp_error($events)) {
-        return ['subject' => 'FRP events watch: error', 'summary' => 'The check could not run.',
+        return ['subject' => 'FRP events watch: error', 'summary' => 'The check could not run.', 'quiet' => false,
                 'sections' => [['key' => 'errors', 'title' => 'Error', 'items' => [$events->get_error_message()]]],
                 'complete' => false];
     }
@@ -186,19 +187,23 @@ function frp_watch_report($now, $soon_from) {
     }
     $n_stale = count($items);
 
-    if (!$n_soon && !$n_stale) {
-        return null;
-    }
+    $quiet = !$n_soon && !$n_stale;
     if ($errors) {
         $sections[] = ['key' => 'errors', 'title' => 'Pages that could not be checked', 'items' => $errors];
     }
-    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live",
+    if ($quiet) {
+        return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
+                'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
+                           . ' hours, and no past events are on the tracked pages.',
+                'sections' => $sections];
+    }
+    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
             'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on the site',
             'sections' => $sections, 'complete' => true];
 }
 
 function frp_watch_render_text($report) {
-    $lines = [];
+    $lines = $report['quiet'] ? [$report['summary'], ''] : [];
     foreach ($report['sections'] as $s) {
         $lines[] = strtoupper($s['title']);
         foreach ($s['items'] as $item) {
@@ -305,34 +310,38 @@ function frp_watch_mail($to, $subject, $text, $html = null) {
     return $code >= 200 && $code < 300 ?: "Resend returned $code: " . wp_remote_retrieve_body($r);
 }
 
+function frp_watch_quiet_email() {
+    return get_option('frp_watch_quiet_email', '1') === '1';
+}
+
 /**
- * Previews never move the soon window. A send moves it forward only once the report is
- * delivered (or there was nothing to report), so a failed run is retried next time.
- * @return array ['status', 'text', 'html'] for the admin page; html is null when there is nothing to report
+ * Previews never move the soon window. A send moves it forward only once the email is
+ * delivered (or skipped on a quiet day), so a failed run is retried next time.
+ * @return array ['status', 'text', 'html'] for the admin page
  */
 function frp_watch_run($send) {
     $now = time();
     $report = frp_watch_report($now, frp_watch_soon_from($now));
-    $done = !$report;
-    $status = $send ? 'Nothing to report, so nothing was sent.' : 'Preview only, not sent.';
-    $text = 'Nothing to report.';
-    $html = null;
-    if ($report) {
-        $report['date'] = wp_date('l, F j, Y', $now);
-        $text = frp_watch_render_text($report);
-        $html = frp_watch_render_html($report, admin_url('tools.php?page=frp-events-watch'));
-        if ($send) {
-            $to = frp_watch_recipient();
-            $ok = frp_watch_mail($to, $report['subject'], $text, $html);
-            $done = $ok === true && $report['complete'];
-            $status = $ok === true ? "Sent to $to." : "Failed sending to $to: $ok";
-        }
-        $text = $report['subject'] . "\n\n" . $text;
+    $report['date'] = wp_date('l, F j, Y', $now);
+    $text = frp_watch_render_text($report);
+    $html = frp_watch_render_html($report, admin_url('tools.php?page=frp-events-watch'));
+    $skip = $report['quiet'] && !frp_watch_quiet_email();
+
+    $done = true;
+    if (!$send) {
+        $status = 'Preview only, not sent.' . ($skip ? ' Quiet-day emails are off, so nothing would be sent today.' : '');
+    } elseif ($skip) {
+        $status = 'Nothing to report; quiet-day emails are off, so nothing was sent.';
+    } else {
+        $to = frp_watch_recipient();
+        $ok = frp_watch_mail($to, $report['subject'], $text, $html);
+        $done = $ok === true && $report['complete'];
+        $status = $ok === true ? "Sent to $to." : "Failed sending to $to: $ok";
     }
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
     }
-    return ['status' => $status, 'text' => $text, 'html' => $html];
+    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html];
 }
 
 add_action('admin_menu', function () {
@@ -344,6 +353,7 @@ add_action('admin_menu', function () {
             $key = sanitize_text_field(wp_unslash($_POST['frp_watch_resend_key'] ?? ''));
             update_option('frp_watch_mail_to', $to, false);
             update_option('frp_watch_mail_from', $from, false);
+            update_option('frp_watch_quiet_email', empty($_POST['frp_watch_quiet_email']) ? '0' : '1', false);
             // Blank keeps the saved key; the remove box clears it.
             if (!empty($_POST['frp_watch_resend_clear'])) {
                 delete_option('frp_watch_resend_key');
@@ -360,6 +370,7 @@ add_action('admin_menu', function () {
         $send = isset($_POST['frp_watch_send']) && check_admin_referer('frp_watch');
         $next = wp_next_scheduled(FRP_WATCH_HOOK);
         $saved_key = get_option('frp_watch_resend_key');
+        $last = get_option('frp_watch_last_run');
         ?>
         <div class="wrap">
             <h1>FRP Events Watch</h1>
@@ -388,8 +399,18 @@ add_action('admin_menu', function () {
                            value="<?php echo esc_attr(get_option('frp_watch_mail_from', '')); ?>"
                            placeholder="onboarding@resend.dev">
                 </p>
+                <p>
+                    <label><input type="checkbox" name="frp_watch_quiet_email" value="1" <?php checked(frp_watch_quiet_email()); ?>>
+                        Email me on days with nothing to report</label>
+                </p>
                 <p><?php submit_button('Save', 'primary', 'frp_watch_save', false); ?></p>
-                <p>Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?></p>
+                <p>
+                    Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?><br>
+                    Last scheduled run: <?php echo $last ? esc_html(wp_date('D M j g:ia T', $last['time']) . ' — ' . $last['status']) : 'never'; ?>
+                </p>
+                <?php if ($next && $next < time() - HOUR_IN_SECONDS) : ?>
+                    <div class="notice notice-warning inline"><p>The scheduled run is overdue, so WP-Cron doesn't seem to be firing. Check Tools → Site Health for scheduled event or loopback warnings.</p></div>
+                <?php endif; ?>
                 <p>
                     <?php submit_button('Send test email', 'secondary', 'frp_watch_test', false); ?>
                     <?php submit_button('Send report now', 'secondary', 'frp_watch_send', false); ?>

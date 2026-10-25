@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Flag FRP events starting soon or already past, and list site pages that still mention them.
 
-Env: RESEND_API_KEY, MAIL_TO (required unless --dry-run); MAIL_FROM, SOON_HOURS (optional).
+Env: RESEND_API_KEY, MAIL_TO (required unless --dry-run); MAIL_FROM, SOON_HOURS (optional);
+QUIET_EMAIL=0 to skip the email on days with nothing to report.
 Usage: python events_watch.py [--dry-run] [--html out.html]
 """
 from __future__ import annotations
@@ -96,7 +97,7 @@ def classify(events: list[dict], now: datetime):
     return sorted(soon, key=lambda e: e["start"]), sorted(past, key=lambda e: e["end"])
 
 
-def build_report(soon, past, pages, errors, now) -> dict | None:
+def build_report(soon, past, pages, errors, now) -> dict:
     """Sections for render_text/render_html. Event items: title, url, when, pages {path: url}."""
     where = lambda e: {p: SITE + p for p, h in pages.items() if mentions(e, h)}
     sections = []
@@ -113,17 +114,21 @@ def build_report(soon, past, pages, errors, now) -> dict | None:
         sections.append({"key": "stale", "title": "Past but still on site", "items": items})
     n_stale = len(items)
 
-    if not (n_soon or n_stale):
-        return None
+    quiet = not (n_soon or n_stale)
     if errors:
         sections.append({"key": "errors", "title": "Pages that failed to load", "items": errors})
-    return {"subject": f"FRP events: {n_soon} soon, {n_stale} past still live",
+    if quiet:
+        return {"subject": "FRP events: nothing to report", "quiet": True,
+                "summary": f"Nothing to report. No events start in the next {SOON_HOURS} hours, "
+                           "and no past events are on the tracked pages.",
+                "date": f"{now:%A, %B %d, %Y}", "sections": sections}
+    return {"subject": f"FRP events: {n_soon} soon, {n_stale} past still live", "quiet": False,
             "summary": f"{n_soon} starting soon · {n_stale} past {'event' if n_stale == 1 else 'events'} still on the site",
             "date": f"{now:%A, %B %d, %Y}", "sections": sections}
 
 
 def render_text(report: dict) -> str:
-    lines = []
+    lines = [report["summary"], ""] if report["quiet"] else []
     for s in report["sections"]:
         lines.append(s["title"].upper())
         for item in s["items"]:
@@ -203,7 +208,7 @@ def main() -> int:
     soon, past = classify(fetch_events(now), now)
     pages, errors = fetch_pages()
     report = build_report(soon, past, pages, errors, now)
-    if not report:
+    if report["quiet"] and os.getenv("QUIET_EMAIL") == "0":
         print("Nothing to report.")
         return 0
     text, html_body = render_text(report), render_html(report, run_url())
