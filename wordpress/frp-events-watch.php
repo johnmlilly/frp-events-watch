@@ -69,27 +69,33 @@ function frp_watch_events($now) {
     return $events;
 }
 
-/** Rendered content plus raw content and meta (page builders keep their data in meta). */
+/**
+ * Page-builder meta keys that hold what the page shows. Other meta (SEO descriptions, caches,
+ * old builder data) can keep mentioning an event after it is removed from the page, so it is skipped.
+ */
+const FRP_WATCH_BUILDER_META = ['_elementor_data', '_fl_builder_data', '_bricks_page_content_2',
+                                'ct_builder_shortcodes', '_themify_builder_settings_json'];
+
+/** @return array [source name => text]: saved content, rendered content, and page-builder data */
 function frp_watch_page_text($id) {
     global $post;
     $page = get_post($id);
-    $text = $page->post_content;
+    $sources = ['saved content' => $page->post_content];
 
     $prev = $post;
     $post = $page;
     setup_postdata($page);
-    $text .= ' ' . apply_filters('the_content', $page->post_content);
+    $sources['rendered content'] = apply_filters('the_content', $page->post_content);
     $post = $prev;
     wp_reset_postdata();
 
-    foreach (get_post_meta($id) as $values) {
-        foreach ($values as $v) {
-            if (is_string($v)) {
-                $text .= ' ' . str_replace('\/', '/', $v);
-            }
+    foreach (FRP_WATCH_BUILDER_META as $key) {
+        $v = get_post_meta($id, $key, true);
+        if (is_string($v) && $v !== '') {
+            $sources["builder data ($key)"] = str_replace('\/', '/', $v);
         }
     }
-    return $text;
+    return $sources;
 }
 
 function frp_watch_pages() {
@@ -110,10 +116,19 @@ function frp_watch_pages() {
     return [$pages, $errors];
 }
 
-function frp_watch_mentions($event, $text) {
+/** @return string|null why the page mentions the event (e.g. "title in rendered content"), or null */
+function frp_watch_mentions($event, $sources) {
     $slug = strtolower(basename(untrailingslashit($event['url'])));
-    return strpos(strtolower($text), "/event/$slug") !== false
-        || strpos(frp_watch_norm($text), frp_watch_norm($event['title'])) !== false;
+    $title = frp_watch_norm($event['title']);
+    foreach ($sources as $name => $text) {
+        if (strpos(strtolower($text), "/event/$slug") !== false) {
+            return "link in $name";
+        }
+        if (strpos(frp_watch_norm($text), $title) !== false) {
+            return "title in $name";
+        }
+    }
+    return null;
 }
 
 /**
@@ -151,11 +166,13 @@ function frp_watch_report($now, $soon_from) {
     usort($past, function ($a, $b) { return $a['end'] <=> $b['end']; });
 
     [$pages, $errors] = frp_watch_pages();
-    $where = function ($e) use ($pages) {
+    $why = []; // "title: path" => reason, shown on the Tools page
+    $where = function ($e) use ($pages, &$why) {
         $hits = [];
-        foreach ($pages as $path => $text) {
-            if (frp_watch_mentions($e, $text)) {
+        foreach ($pages as $path => $sources) {
+            if ($reason = frp_watch_mentions($e, $sources)) {
                 $hits[$path] = home_url($path);
+                $why["{$e['title']}: $path"] = $reason;
             }
         }
         return $hits;
@@ -195,11 +212,11 @@ function frp_watch_report($now, $soon_from) {
         return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
                 'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
                            . ' hours, and no past events are on the tracked pages.',
-                'sections' => $sections];
+                'sections' => $sections, 'why' => $why];
     }
     return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
             'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on the site',
-            'sections' => $sections, 'complete' => true];
+            'sections' => $sections, 'why' => $why, 'complete' => true];
 }
 
 function frp_watch_render_text($report) {
@@ -341,7 +358,8 @@ function frp_watch_run($send) {
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
     }
-    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html];
+    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html,
+            'why' => $report['why'] ?? []];
 }
 
 add_action('admin_menu', function () {
@@ -427,6 +445,14 @@ add_action('admin_menu', function () {
                 <summary>Plain-text version</summary>
                 <pre style="white-space:pre-wrap"><?php echo esc_html($run['text']); ?></pre>
             </details>
+            <?php if ($run['why']) : ?>
+                <h2>Why each page matched</h2>
+                <ul>
+                    <?php foreach ($run['why'] as $what => $reason) : ?>
+                        <li><?php echo esc_html("$what — $reason"); ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
         </div>
         <?php
     });
