@@ -96,3 +96,8 @@ Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_
 ### Reuse on another site
 
 Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you install both copies on one site, also rename `FRP_WATCH_HOOK`, the `frp_watch_` function prefix and option names so they don't collide. The site needs The Events Calendar.
+
+### Changelog
+
+- **1.1.0:** recipient and Resend settings, HTML email, soon window carried across runs, quiet-day email, last-run status, page-builder-only scan with match reasons.
+- **1.0.0:** initial port of `events_watch.py`.

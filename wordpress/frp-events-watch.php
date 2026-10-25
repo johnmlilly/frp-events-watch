@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Requires PHP: 7.4
  *
  * Port of events_watch.py that runs inside WordPress, so Cloudflare is never involved.
