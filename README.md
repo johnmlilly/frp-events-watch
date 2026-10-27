@@ -28,7 +28,7 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it checks page content and Avia (Enfold) builder data only (while Avia is active on the page), not headers, footers, sidebars, menus or SEO fields. The Tools page lists why each page matched (link or title, and where), which helps track down a stale mention.
+Limitation: it checks page content and Avia (Enfold) builder data only (while Avia is active on the page), not headers, footers, sidebars, menus or SEO fields. For each page, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
 
 ## Install
 
@@ -58,6 +58,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.2.0:** the email names where each event appears on a page (Avia image, button, text block, etc.); the "Why each page matched" list on the Tools page is removed.
 - **1.1.4:** "Why each page matched" shows the surrounding text of each match; reads the front page from Enfold's theme options when WordPress has none set.
 - **1.1.3:** stricter matching: event links must match the full event address (no prefix matches, works with any events URL), titles must match as whole words, and empty titles never match.
 - **1.1.2:** scans Avia only; drops Elementor, Beaver Builder, Bricks, Oxygen and Themify.

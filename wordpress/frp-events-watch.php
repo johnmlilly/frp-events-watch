@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.1.4
+ * Version: 1.2.0
  * Requires PHP: 7.4
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
@@ -122,29 +122,54 @@ function frp_watch_pages() {
  * A link matches the event's own address, so a custom events slug or plain permalinks work, and
  * it must end there: /event/retreat doesn't match /event/retreat-2026/. A title must stand alone:
  * "Retreat" doesn't match "Retreats". Empty titles and addresses never match.
- * @return string|null why the page mentions the event, with the surrounding text so it can be found
- *                     (e.g. 'title in rendered content: "…"'), or null
+ * @return string[] where on the page the event appears, e.g. ['Image link', 'Text block title'];
+ *                  empty when it doesn't. Uses the first source (saved content first) that mentions it.
  */
 function frp_watch_mentions($event, $sources) {
     $path = untrailingslashit(wp_make_link_relative($event['url']));
     $link = $path !== '' ? '#' . preg_quote($path, '#') . '(?![\w-])#i' : null;
     $title = frp_watch_norm($event['title']);
     $named = $title !== '' ? '/(?<![\p{L}\p{N}])' . preg_quote($title, '/') . '(?![\p{L}\p{N}])/u' : null;
-    $context = function ($text, $m) {
-        $from = max(0, $m[0][1] - 80);
-        $snippet = preg_replace('/\s+/u', ' ', mb_strcut($text, $from, strlen($m[0][0]) + 160, 'UTF-8'));
-        return ': "…' . trim($snippet) . '…"';
-    };
-    foreach ($sources as $name => $text) {
-        if ($link && preg_match($link, $text, $m, PREG_OFFSET_CAPTURE)) {
-            return "link in $name" . $context($text, $m);
+    foreach ($sources as $text) {
+        $found = [];
+        if ($link && preg_match_all($link, $text, $m, PREG_OFFSET_CAPTURE)) {
+            foreach ($m[0] as [, $at]) {
+                $found[] = frp_watch_element($text, $at, 'link');
+            }
         }
         $norm = frp_watch_norm($text);
-        if ($named && preg_match($named, $norm, $m, PREG_OFFSET_CAPTURE)) {
-            return "title in $name" . $context($norm, $m);
+        if ($named && preg_match_all($named, $norm, $m, PREG_OFFSET_CAPTURE)) {
+            foreach ($m[0] as [, $at]) {
+                $found[] = frp_watch_element($norm, $at, 'title');
+            }
+        }
+        if ($found) {
+            return array_values(array_unique($found));
         }
     }
-    return null;
+    return [];
+}
+
+/**
+ * Names the page element around $at: the innermost Avia element (its shortcode, e.g. [av_image ...]),
+ * or a plain "Link" / "Text" outside Avia.
+ */
+function frp_watch_element($text, $at, $kind) {
+    $names = ['av_image' => 'Image', 'av_button' => 'Button', 'av_button_big' => 'Big button (CTA)',
+              'av_buttonrow' => 'Button row', 'av_promobox' => 'Promo box (CTA)', 'av_icon_box' => 'Icon box',
+              'av_textblock' => 'Text block', 'av_heading' => 'Heading', 'av_slideshow' => 'Slideshow',
+              'av_slideshow_full' => 'Slideshow', 'av_masonry_entries' => 'Masonry', 'av_tab' => 'Tab',
+              'av_toggle' => 'Toggle', 'av_image_hotspot' => 'Image hotspot', 'av_hotspot' => 'Image hotspot',
+              'av_notification' => 'Notification box'];
+    $element = '';
+    if (preg_match_all('/\[(av_[a-z0-9_]+)/i', substr($text, 0, $at), $m)) {
+        $tag = strtolower(end($m[1]));
+        $element = $names[$tag] ?? ucfirst(str_replace('_', ' ', substr($tag, 3)));
+    }
+    if ($kind === 'link') {
+        return $element ? "$element link" : 'Link';
+    }
+    return ($element ?: 'Text') . ' (title)';
 }
 
 /**
@@ -161,7 +186,7 @@ function frp_watch_soon_from($now) {
  * @return array ['subject', 'summary', 'sections', 'quiet', 'complete']. quiet is true when there is
  *               nothing to report; complete is false when events could not be read.
  *                    Each section: ['key' => soon|stale|errors, 'title', 'items']; event items are
- *                    ['title', 'url', 'when', 'in_progress', 'pages' => [path => url]], error items
+ *                    ['title', 'url', 'when', 'in_progress', 'pages' => [path => ['url', 'how']]], error items
  *                    are strings.
  */
 function frp_watch_report($now, $soon_from) {
@@ -182,13 +207,11 @@ function frp_watch_report($now, $soon_from) {
     usort($past, function ($a, $b) { return $a['end'] <=> $b['end']; });
 
     [$pages, $errors] = frp_watch_pages();
-    $why = []; // "title: path" => reason, shown on the Tools page
-    $where = function ($e) use ($pages, &$why) {
+    $where = function ($e) use ($pages) {
         $hits = [];
         foreach ($pages as $path => $sources) {
-            if ($reason = frp_watch_mentions($e, $sources)) {
-                $hits[$path] = home_url($path);
-                $why["{$e['title']}: $path"] = $reason;
+            if ($how = frp_watch_mentions($e, $sources)) {
+                $hits[$path] = ['url' => home_url($path), 'how' => $how];
             }
         }
         return $hits;
@@ -228,11 +251,11 @@ function frp_watch_report($now, $soon_from) {
         return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
                 'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
                            . ' hours, and no past events are on the tracked pages.',
-                'sections' => $sections, 'why' => $why];
+                'sections' => $sections];
     }
     return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
             'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on the site',
-            'sections' => $sections, 'why' => $why, 'complete' => true];
+            'sections' => $sections, 'complete' => true];
 }
 
 function frp_watch_render_text($report) {
@@ -246,7 +269,12 @@ function frp_watch_render_text($report) {
             }
             $lines[] = "- {$item['title']} ({$item['when']})";
             $lines[] = "  {$item['url']}";
-            $lines[] = '  On: ' . ($item['pages'] ? implode(', ', array_keys($item['pages'])) : 'not found on scanned pages');
+            if (!$item['pages']) {
+                $lines[] = '  On: not found on scanned pages';
+            }
+            foreach ($item['pages'] as $path => $page) {
+                $lines[] = "  On: $path (" . implode(', ', $page['how']) . ')';
+            }
         }
         $lines[] = '';
     }
@@ -273,13 +301,16 @@ function frp_watch_render_html($report, $footer_url) {
             $tag = $item['in_progress']
                 ? ' <span style="display:inline-block;font-size:11px;font-weight:600;color:#166534;background:#dcfce7;border-radius:10px;padding:1px 8px;vertical-align:middle;">In progress</span>'
                 : '';
+            // One line per page: the page as a link, then where on it the event appears.
             $chips = '';
-            foreach ($item['pages'] as $path => $url) {
-                $chips .= '<a href="' . $h($url) . '" style="display:inline-block;font-size:12px;color:#1f2a44;background:#eef2ff;border-radius:10px;padding:2px 9px;margin:2px 4px 2px 0;text-decoration:none;">'
-                        . $h($path) . '</a>';
+            foreach ($item['pages'] as $path => $page) {
+                $chips .= '<div style="margin-top:4px;">'
+                        . '<a href="' . $h($page['url']) . '" style="display:inline-block;font-size:12px;color:#1f2a44;background:#eef2ff;border-radius:10px;padding:2px 9px;margin-right:6px;text-decoration:none;">'
+                        . $h($path) . '</a>'
+                        . '<span style="font-size:12px;color:#6b7280;">' . $h(implode(' · ', $page['how'])) . '</span></div>';
             }
             if (!$chips) {
-                $chips = '<span style="color:#9ca3af;">Not on any tracked page</span>';
+                $chips = ' <span style="color:#9ca3af;">Not on any tracked page</span>';
             }
             $body .= "<div style=\"border-left:4px solid $c;background:#f9fafb;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:10px;\">"
                    . '<a href="' . $h($item['url']) . '" style="font-size:15px;font-weight:600;color:#111827;text-decoration:none;">' . $h($item['title']) . '</a>' . $tag
@@ -374,8 +405,7 @@ function frp_watch_run($send) {
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
     }
-    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html,
-            'why' => $report['why'] ?? []];
+    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html];
 }
 
 add_action('admin_menu', function () {
@@ -461,14 +491,6 @@ add_action('admin_menu', function () {
                 <summary>Plain-text version</summary>
                 <pre style="white-space:pre-wrap"><?php echo esc_html($run['text']); ?></pre>
             </details>
-            <?php if ($run['why']) : ?>
-                <h2>Why each page matched</h2>
-                <ul>
-                    <?php foreach ($run['why'] as $what => $reason) : ?>
-                        <li><?php echo esc_html("$what — $reason"); ?></li>
-                    <?php endforeach; ?>
-                </ul>
-            <?php endif; ?>
         </div>
         <?php
     });
