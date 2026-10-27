@@ -5,6 +5,7 @@
  * Version: 1.2.0
  * Requires PHP: 7.4
  * Author: John Lilly
+ * Author URI: https://johnlilly.dev
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
  * With a Resend API key set, mail goes through Resend's API; otherwise through wp_mail.
