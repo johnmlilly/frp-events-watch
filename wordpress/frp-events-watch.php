@@ -4,6 +4,7 @@
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
  * Version: 1.2.0
  * Requires PHP: 7.4
+ * Author: John Lilly
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
  * With a Resend API key set, mail goes through Resend's API; otherwise through wp_mail.
