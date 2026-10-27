@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned anywhere on the site. Read-only; never edits content.
- * Version: 1.3.0
+ * Version: 1.4.0
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -64,8 +64,8 @@ function frp_watch_norm($s) {
 }
 
 /**
- * Events from the lookback start through a year ahead. The far end is only needed to know which
- * titles still belong to an upcoming event (see frp_watch_find).
+ * Events and dates of recurring events that end after the lookback start and start within a year.
+ * The far end tells which titles and links still belong to an event to come.
  * @return array|WP_Error list of ['id', 'title', 'url', 'start', 'end'] with UTC timestamps
  */
 function frp_watch_events($now) {
@@ -97,7 +97,7 @@ function frp_watch_events($now) {
  * type except The Events Calendar's own, the nav menus, and the active widgets of each sidebar.
  * Posts are read from the database, not rendered, so other meta (SEO descriptions, caches) and
  * content built at render time (post sliders, event lists) are not scanned.
- * @return Generator of ['id', 'label', 'url', 'sources' => [source name => text]]
+ * @return Generator of ['label', 'url', 'sources' => [source name => text]]
  */
 function frp_watch_places() {
     $types = array_values(array_filter(array_merge(get_post_types(['public' => true]), ['wp_block']), function ($t) {
@@ -124,7 +124,7 @@ function frp_watch_places() {
                 $url = get_permalink($p);
                 $label = wp_make_link_relative($url) ?: '/';
             }
-            yield ['id' => $p->ID, 'label' => $label, 'url' => $url, 'sources' => $sources];
+            yield ['label' => $label, 'url' => $url, 'sources' => $sources];
         }
         if (count($q->posts) < 200) {
             break;
@@ -136,7 +136,7 @@ function frp_watch_places() {
         foreach (wp_get_nav_menu_items($menu) ?: [] as $item) {
             $text .= '<a href="' . $item->url . '">' . $item->title . "</a>\n";
         }
-        yield ['id' => 0, 'label' => "Menu: $menu->name", 'sources' => ['menu' => $text],
+        yield ['label' => "Menu: $menu->name", 'sources' => ['menu' => $text],
                'url' => admin_url('nav-menus.php?action=edit&menu=' . $menu->term_id)];
     }
 
@@ -162,93 +162,169 @@ function frp_watch_places() {
         }
         if ($text !== '') {
             $name = $wp_registered_sidebars[$sidebar]['name'] ?? $sidebar;
-            yield ['id' => 0, 'label' => "Widgets: $name", 'url' => admin_url('widgets.php'),
+            yield ['label' => "Widgets: $name", 'url' => admin_url('widgets.php'),
                    'sources' => ['widgets' => $text]];
         }
     }
 }
 
-/**
- * A link matches the event's own address, so a custom events slug or plain permalinks work. It
- * must start a URL or follow the host (/other/event/retreat doesn't match /event/retreat) and end
- * there (/event/retreat doesn't match /event/retreat-2026/). A title must stand alone: "Retreat"
- * doesn't match "Retreats". Empty titles and addresses never match.
- * @param bool $by_title false to match links only
- */
-function frp_watch_matcher($event, $by_title) {
-    $path = untrailingslashit(wp_make_link_relative($event['url']));
-    $title = $by_title ? frp_watch_norm($event['title']) : '';
-    return [
-        'link' => $path !== '' ? '#(?:^|[\s"\'=(,]|//[^/\s"\'<>]*)' . preg_quote($path, '#') . '(?![\w-])#i' : null,
-        'title' => $title !== '' ? '/(?<![\p{L}\p{N}])' . preg_quote($title, '/') . '(?![\p{L}\p{N}])/u' : null,
-    ];
+/** The events' single-event URL base, "event" unless changed in The Events Calendar's settings. */
+function frp_watch_event_base() {
+    $base = '';
+    if (class_exists('Tribe__Events__Main') && method_exists('Tribe__Events__Main', 'instance')) {
+        $base = Tribe__Events__Main::instance()->getRewriteSlugSingular();
+    } elseif (function_exists('tribe_get_option')) {
+        $base = tribe_get_option('singleEventSlug', 'event');
+    }
+    return trim((string) $base, '/') ?: 'event';
 }
 
 /**
- * Links are matched in the raw text; titles in the normalized text with HTML tags turned into
- * spaces, so "<strong>Retreat</strong> 2026" reads "retreat 2026". Shortcodes survive, so the
- * element around a title can still be named.
- * @param array $texts list of [raw, normalized] per source, from frp_watch_prepare()
- * @return string[] where on the page the event appears, e.g. ['Image link', 'Text block (title)'];
- *                  empty when it doesn't. Uses the first source that mentions it.
+ * Every link to an event in $text, whatever the event: links are resolved to events afterwards, so
+ * a link to an event that ended long ago, was unpublished or was deleted is found too. Three forms:
+ * - a URL on this site under the event base, with or without the host (/event/retreat/, and
+ *   /event/retreat/2026-10-20/ for one date of a recurring event); /other/event/retreat and
+ *   /event/retreat-2026 are not /event/retreat;
+ * - plain permalinks (?tribe_events=retreat);
+ * - Avia's internal links, which store the post type and ID instead of a URL (tribe_events,123).
+ * @return array list of [key, offset]; the key is "slug" or "slug/date", or "#id" for an ID whose
+ *               event no longer exists
  */
-function frp_watch_mentions($matcher, $texts) {
-    foreach ($texts as [$text, $norm]) {
-        $found = [];
-        if ($matcher['link'] && preg_match_all($matcher['link'], $text, $m, PREG_OFFSET_CAPTURE)) {
-            foreach ($m[0] as [, $at]) {
-                $found[] = frp_watch_element($text, $at, 'link');
+function frp_watch_refs($text) {
+    static $re, $ids = [];
+    if (!$re) {
+        $host = preg_quote(preg_replace('/^www\./i', '', (string) wp_parse_url(home_url(), PHP_URL_HOST)), '#');
+        $home = preg_quote(untrailingslashit((string) wp_parse_url(home_url('/'), PHP_URL_PATH)), '#');
+        $base = preg_quote(frp_watch_event_base(), '#');
+        $re = ["#(?:(?:https?:)?//(?:www\.)?$host|(?<![\w.~%/-]))$home/$base/([\w%.~-]+)(?:/(\d{4}-\d{2}-\d{2}))?(?![\w%.~-])#i",
+               '#[?&](?:amp;)?tribe_events=([\w%.~-]+)()#i'];
+    }
+    $refs = [];
+    foreach ($re as $r) {
+        if (preg_match_all($r, $text, $m, PREG_OFFSET_CAPTURE | PREG_SET_ORDER)) {
+            foreach ($m as $hit) {
+                $slug = strtolower($hit[1][0]);
+                $date = $hit[2][0] ?? '';
+                $refs[] = [$date !== '' ? "$slug/$date" : $slug, $hit[0][1]];
             }
         }
-        if ($matcher['title'] && preg_match_all($matcher['title'], $norm, $m, PREG_OFFSET_CAPTURE)) {
-            foreach ($m[0] as [, $at]) {
-                $found[] = frp_watch_element($norm, $at, 'title');
+    }
+    if (preg_match_all('#\btribe_events,(\d+)\b#', $text, $m, PREG_OFFSET_CAPTURE | PREG_SET_ORDER)) {
+        foreach ($m as $hit) {
+            $id = (int) $hit[1][0];
+            if (!isset($ids[$id])) {
+                // Drafts have no pretty URL, so fall back to the slug, which links by URL also use.
+                $p = get_post($id);
+                $url = $p ? get_permalink($p) : '';
+                $slug = $p ? strtolower(preg_replace('/__trashed$/', '', $p->post_name)) : '';
+                $ids[$id] = ($url ? frp_watch_refs($url)[0][0] ?? null : null) ?? ($slug !== '' ? $slug : "#$id");
             }
-        }
-        if ($found) {
-            return array_values(array_unique($found));
+            $refs[] = [$ids[$id], $hit[0][1]];
         }
     }
-    return [];
+    return $refs;
 }
 
-function frp_watch_prepare($sources) {
-    return array_map(function ($text) {
-        return [$text, frp_watch_norm(preg_replace('/<[^>]*>/', ' ', $text))];
-    }, array_values($sources));
+/** The key frp_watch_refs() gives a link to this event. */
+function frp_watch_event_key($event) {
+    return frp_watch_refs($event['url'])[0][0] ?? "#{$event['id']}";
 }
 
 /**
- * A past event's title also names the next instance of a recurring event, so a past event
- * matches by title only when no event that hasn't ended shares it; links still count.
- * @param array $events events to look for, keyed however the caller likes
- * @param array $all every fetched event, to find titles still in use
- * @return array same keys as $events => [place label => ['url', 'how']]
+ * Where each event is mentioned anywhere on the site. Links to any event are collected (see
+ * frp_watch_refs); titles only for the events in $titles.
+ * @param array $titles event key => title regex
+ * @return array event key => [place label => ['url', 'how' => where on the page]]
  */
-function frp_watch_find($events, $all, $now) {
-    $hits = array_fill_keys(array_keys($events), []);
-    if (!$events) {
-        return $hits;
-    }
-    $live = [];
-    foreach ($all as $e) {
-        if ($e['end'] >= $now) {
-            $live[frp_watch_norm($e['title'])] = true;
-        }
-    }
-    $matchers = [];
-    foreach ($events as $k => $e) {
-        $matchers[$k] = frp_watch_matcher($e, $e['end'] >= $now || !isset($live[frp_watch_norm($e['title'])]));
-    }
+function frp_watch_find($titles) {
+    $hits = [];
     foreach (frp_watch_places() as $place) {
-        $texts = frp_watch_prepare($place['sources']);
-        foreach ($events as $k => $e) {
-            if ($place['id'] !== $e['id'] && ($how = frp_watch_mentions($matchers[$k], $texts))) {
-                $hits[$k][$place['label']] = ['url' => $place['url'], 'how' => $how];
+        $found = [];
+        foreach ($place['sources'] as $text) {
+            // Block attributes can store URLs with escaped slashes.
+            $text = str_replace('\/', '/', $text);
+            $here = [];
+            foreach (frp_watch_refs($text) as [$key, $at]) {
+                $here[$key][] = frp_watch_element($text, $at, 'link');
             }
+            // Titles are searched with HTML tags turned into spaces, so "<strong>Retreat</strong> 2026"
+            // reads "retreat 2026". Shortcodes survive, so the element around a title can still be named.
+            $norm = $titles ? frp_watch_norm(preg_replace('/<[^>]*>/', ' ', $text)) : '';
+            foreach ($titles as $key => $re) {
+                if (preg_match_all($re, $norm, $m, PREG_OFFSET_CAPTURE)) {
+                    foreach ($m[0] as [, $at]) {
+                        $here[$key][] = frp_watch_element($norm, $at, 'title');
+                    }
+                }
+            }
+            foreach ($here as $key => $how) {
+                $found[$key] = array_merge($found[$key] ?? [], $how);
+            }
+        }
+        foreach ($found as $key => $how) {
+            $hits[$key][$place['label']] = ['url' => $place['url'], 'how' => array_values(array_unique($how))];
         }
     }
     return $hits;
+}
+
+/**
+ * A title must stand alone: "Retreat" doesn't match "Retreats". Empty titles never match.
+ * @return string|null regex for normalized text
+ */
+function frp_watch_title_re($title) {
+    $title = frp_watch_norm($title);
+    return $title !== '' ? '/(?<![\p{L}\p{N}])' . preg_quote($title, '/') . '(?![\p{L}\p{N}])/u' : null;
+}
+
+/**
+ * Checks a linked event that isn't among the fetched events, which hold every event or date ending
+ * after the lookback start and starting within a year. So a published one is either long past or
+ * more than a year away.
+ * @param array $fetched event key => event
+ * @return array|null ['title', 'url', 'when', 'sort'] when the link is stale: the event ended, isn't
+ *                    published, or no longer exists; null when it still leads somewhere current
+ */
+function frp_watch_resolve($key, $fetched, $now) {
+    [$slug, $date] = array_pad(explode('/', $key, 2), 2, '');
+    $statuses = ['publish', 'future', 'draft', 'pending', 'private', 'trash'];
+    if ($slug[0] === '#') {
+        $p = get_post((int) substr($slug, 1));
+        $p = $p && $p->post_type === 'tribe_events' && in_array($p->post_status, $statuses, true) ? $p : null;
+        $url = '';
+    } else {
+        $p = get_posts(['post_type' => 'tribe_events', 'post_status' => $statuses, 'numberposts' => 1,
+                        'post_name__in' => [$slug, "{$slug}__trashed"], 'suppress_filters' => true])[0] ?? null;
+        $url = home_url(frp_watch_event_base() . "/$key/");
+    }
+    if (!$p) {
+        return ['title' => $slug[0] === '#' ? "Event $slug" : $slug, 'url' => $url, 'when' => 'event no longer exists', 'sort' => 0];
+    }
+    $title = html_entity_decode(get_the_title($p), ENT_QUOTES, 'UTF-8');
+    if ($p->post_status === 'future') {
+        return null;
+    }
+    if ($p->post_status !== 'publish') {
+        return ['title' => $title, 'url' => $url, 'when' => "event is not published ($p->post_status)", 'sort' => 0];
+    }
+    if ($date !== '') {
+        // A date not fetched is outside the window; one before today has ended.
+        $day = (new DateTimeImmutable($date, wp_timezone()))->getTimestamp();
+        return $day + DAY_IN_SECONDS < $now ? ['title' => $title, 'url' => $url, 'sort' => $day,
+                                               'when' => 'was on ' . wp_date('D M j, Y', $day)] : null;
+    }
+    // The plain link to a recurring event still leads somewhere while any of its dates is to come.
+    foreach ($fetched as $k => $e) {
+        if (strpos($k, "$slug/") === 0 && $e['end'] >= $now) {
+            return null;
+        }
+    }
+    $e = tribe_get_event($p);
+    if (!$e || empty($e->dates->start_utc)) {
+        return null;
+    }
+    $end = (empty($e->dates->end_utc) ? $e->dates->start_utc : $e->dates->end_utc)->getTimestamp();
+    return $end < $now ? ['title' => $title, 'url' => $url, 'when' => 'ended ' . wp_date('D M j, Y', $end), 'sort' => $end] : null;
 }
 
 /**
@@ -262,11 +338,29 @@ function frp_watch_element($text, $at, $kind) {
               'av_slideshow_full' => 'Slideshow', 'av_masonry_entries' => 'Masonry', 'av_tab' => 'Tab',
               'av_toggle' => 'Toggle', 'av_image_hotspot' => 'Image hotspot', 'av_hotspot' => 'Image hotspot',
               'av_notification' => 'Notification box'];
-    $element = '';
-    if (preg_match_all('/\[(av_[a-z0-9_]+)/i', substr($text, 0, $at), $m)) {
-        $tag = strtolower(end($m[1]));
-        $element = $names[$tag] ?? ucfirst(str_replace('_', ' ', substr($tag, 3)));
+    $before = substr($text, 0, $at);
+    $open = strrpos($before, '[');
+    if ($open !== false && strpos($before, ']', $open) === false
+        && preg_match('/^\[(av_[a-z0-9_]+)/i', substr($before, $open), $m)) {
+        // Inside the shortcode itself, e.g. its link attribute.
+        $tag = strtolower($m[1]);
+    } else {
+        // Inside the innermost element still open here. Elements without a closing tag (buttons,
+        // images) can't contain anything, so they never count.
+        $stack = [];
+        preg_match_all('#\[(/?)(av_[a-z0-9_]+)#i', $before, $m, PREG_SET_ORDER);
+        foreach ($m as [, $close, $name]) {
+            $name = strtolower($name);
+            if ($close) {
+                $i = array_search($name, array_reverse($stack, true), true);
+                $stack = $i === false ? $stack : array_slice($stack, 0, $i);
+            } elseif (stripos($text, "[/$name]") !== false) {
+                $stack[] = $name;
+            }
+        }
+        $tag = $stack ? end($stack) : '';
     }
+    $element = $tag ? $names[$tag] ?? ucfirst(str_replace('_', ' ', substr($tag, 3))) : '';
     if ($kind === 'link') {
         return $element ? "$element link" : 'Link';
     }
@@ -298,31 +392,38 @@ function frp_watch_report($now, $soon_from) {
                 'complete' => false];
     }
     $soon_until = $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS;
-    $soon = array_filter($events, function ($e) use ($now, $soon_from, $soon_until) {
+    $fetched = [];
+    $live = [];
+    foreach ($events as $e) {
+        $fetched[frp_watch_event_key($e)] = $e;
+        if ($e['end'] >= $now) {
+            $live[frp_watch_norm($e['title'])] = true;
+        }
+    }
+    $soon = array_filter($fetched, function ($e) use ($now, $soon_from, $soon_until) {
         return $e['start'] > $soon_from && $e['start'] <= $soon_until && $e['end'] >= $now;
     });
-    $past = array_filter($events, function ($e) use ($now) {
-        return $e['end'] < $now;
-    });
-    usort($soon, function ($a, $b) { return $a['start'] <=> $b['start']; });
-    usort($past, function ($a, $b) { return $a['end'] <=> $b['end']; });
+    uasort($soon, function ($a, $b) { return $a['start'] <=> $b['start']; });
 
-    $find = [];
-    foreach ($soon as $i => $e) {
-        $find["soon$i"] = $e;
+    // Titles are searched for events starting soon and events that ended within the lookback. A past
+    // event's title also names the next date of a recurring event, so it is searched only when no
+    // event that hasn't ended shares it. Links are found for every event, however old.
+    $titles = [];
+    foreach ($fetched as $key => $e) {
+        $past = $e['end'] < $now && !isset($live[frp_watch_norm($e['title'])]);
+        if ((isset($soon[$key]) || $past) && ($re = frp_watch_title_re($e['title']))) {
+            $titles[$key] = $re;
+        }
     }
-    foreach ($past as $i => $e) {
-        $find["past$i"] = $e;
-    }
-    $hits = frp_watch_find($find, $events, $now);
+    $hits = frp_watch_find($titles);
 
     $sections = [];
     $items = [];
-    foreach ($soon as $i => $e) {
+    foreach ($soon as $key => $e) {
         $started = $e['start'] < $now;
         $items[] = ['title' => $e['title'], 'url' => $e['url'], 'in_progress' => $started,
                     'when' => ($started ? 'started ' : '') . wp_date('D M j g:ia T', $e['start']),
-                    'pages' => $hits["soon$i"]];
+                    'pages' => $hits[$key] ?? []];
     }
     if ($items) {
         $sections[] = ['key' => 'soon', 'title' => 'Starting within ' . FRP_WATCH_SOON_HOURS . ' hours', 'items' => $items];
@@ -330,12 +431,19 @@ function frp_watch_report($now, $soon_from) {
     $n_soon = count($items);
 
     $items = [];
-    foreach ($past as $i => $e) {
-        if ($hits["past$i"]) {
-            $items[] = ['title' => $e['title'], 'url' => $e['url'], 'in_progress' => false,
-                        'when' => 'ended ' . wp_date('D M j', $e['end']), 'pages' => $hits["past$i"]];
+    foreach ($hits as $key => $pages) {
+        if (isset($fetched[$key])) {
+            $e = $fetched[$key];
+            $item = $e['end'] < $now ? ['title' => $e['title'], 'url' => $e['url'], 'sort' => $e['end'],
+                                        'when' => 'ended ' . wp_date('D M j', $e['end'])] : null;
+        } else {
+            $item = frp_watch_resolve($key, $fetched, $now);
+        }
+        if ($item) {
+            $items[] = $item + ['in_progress' => false, 'pages' => $pages];
         }
     }
+    usort($items, function ($a, $b) { return $a['sort'] <=> $b['sort']; });
     if ($items) {
         $sections[] = ['key' => 'stale', 'title' => 'Past but still on site', 'items' => $items];
     }
