@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Requires PHP: 7.4
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
@@ -92,6 +92,15 @@ function frp_watch_page_text($id) {
         $v = get_post_meta($id, $key, true);
         if (is_string($v) && $v !== '') {
             $sources["builder data ($key)"] = str_replace('\/', '/', $v);
+        }
+    }
+
+    // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
+    // to the default editor, so only read it while the Avia builder is active on the page.
+    if (get_post_meta($id, '_aviaLayoutBuilder_active', true) === 'active') {
+        $v = get_post_meta($id, '_aviaLayoutBuilderCleanData', true);
+        if (is_string($v) && $v !== '') {
+            $sources['builder data (_aviaLayoutBuilderCleanData)'] = $v;
         }
     }
     return $sources;

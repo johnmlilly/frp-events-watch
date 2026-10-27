@@ -28,7 +28,7 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it checks page content and page-builder data only (`FRP_WATCH_BUILDER_META`), not headers, footers, sidebars, menus or SEO fields. The Tools page lists why each page matched (link or title, and where), which helps track down a stale mention.
+Limitation: it checks page content and page-builder data only (`FRP_WATCH_BUILDER_META`, plus Avia/Enfold when active on the page), not headers, footers, sidebars, menus or SEO fields. The Tools page lists why each page matched (link or title, and where), which helps track down a stale mention.
 
 ## Install
 
@@ -58,5 +58,6 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.1.1:** reads Avia Layout Builder (Enfold) page data, only while Avia is active on the page.
 - **1.1.0:** recipient and Resend settings, HTML email, soon window carried across runs, quiet-day email, last-run status, page-builder-only scan with match reasons.
 - **1.0.0:** initial release.
