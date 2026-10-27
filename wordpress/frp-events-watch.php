@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.1.3
+ * Version: 1.1.4
  * Requires PHP: 7.4
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
@@ -102,6 +102,10 @@ function frp_watch_pages() {
     foreach (FRP_WATCH_PAGES as $path) {
         if ($path === '/') {
             $id = get_option('show_on_front') === 'page' ? (int) get_option('page_on_front') : 0;
+            // Enfold can set the front page in its own theme options instead.
+            if (!$id && function_exists('avia_get_option')) {
+                $id = (int) avia_get_option('frontpage');
+            }
         } else {
             $id = url_to_postid(home_url($path));
         }
@@ -118,19 +122,26 @@ function frp_watch_pages() {
  * A link matches the event's own address, so a custom events slug or plain permalinks work, and
  * it must end there: /event/retreat doesn't match /event/retreat-2026/. A title must stand alone:
  * "Retreat" doesn't match "Retreats". Empty titles and addresses never match.
- * @return string|null why the page mentions the event (e.g. "title in rendered content"), or null
+ * @return string|null why the page mentions the event, with the surrounding text so it can be found
+ *                     (e.g. 'title in rendered content: "…"'), or null
  */
 function frp_watch_mentions($event, $sources) {
     $path = untrailingslashit(wp_make_link_relative($event['url']));
     $link = $path !== '' ? '#' . preg_quote($path, '#') . '(?![\w-])#i' : null;
     $title = frp_watch_norm($event['title']);
     $named = $title !== '' ? '/(?<![\p{L}\p{N}])' . preg_quote($title, '/') . '(?![\p{L}\p{N}])/u' : null;
+    $context = function ($text, $m) {
+        $from = max(0, $m[0][1] - 80);
+        $snippet = preg_replace('/\s+/u', ' ', mb_strcut($text, $from, strlen($m[0][0]) + 160, 'UTF-8'));
+        return ': "…' . trim($snippet) . '…"';
+    };
     foreach ($sources as $name => $text) {
-        if ($link && preg_match($link, $text)) {
-            return "link in $name";
+        if ($link && preg_match($link, $text, $m, PREG_OFFSET_CAPTURE)) {
+            return "link in $name" . $context($text, $m);
         }
-        if ($named && preg_match($named, frp_watch_norm($text))) {
-            return "title in $name";
+        $norm = frp_watch_norm($text);
+        if ($named && preg_match($named, $norm, $m, PREG_OFFSET_CAPTURE)) {
+            return "title in $name" . $context($norm, $m);
         }
     }
     return null;

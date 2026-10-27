@@ -58,6 +58,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.1.4:** "Why each page matched" shows the surrounding text of each match; reads the front page from Enfold's theme options when WordPress has none set.
 - **1.1.3:** stricter matching: event links must match the full event address (no prefix matches, works with any events URL), titles must match as whole words, and empty titles never match.
 - **1.1.2:** scans Avia only; drops Elementor, Beaver Builder, Bricks, Oxygen and Themify.
 - **1.1.1:** reads Avia Layout Builder (Enfold) page data, only while Avia is active on the page.
