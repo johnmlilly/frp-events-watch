@@ -22,7 +22,7 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Step | What happens |
 |---|---|
 | 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
-| 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus Avia builder data) and looks for each event by its URL slug or title. |
+| 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus Avia builder data) and looks for each event by a link to its address or its title as a whole phrase. |
 | 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. On days with nothing to report it sends a short all-clear, unless that's turned off in settings. |
 | Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. The Tools page previews both. |
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
@@ -58,6 +58,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.1.3:** stricter matching: event links must match the full event address (no prefix matches, works with any events URL), titles must match as whole words, and empty titles never match.
 - **1.1.2:** scans Avia only; drops Elementor, Beaver Builder, Bricks, Oxygen and Themify.
 - **1.1.1:** reads Avia Layout Builder (Enfold) page data, only while Avia is active on the page.
 - **1.1.0:** recipient and Resend settings, HTML email, soon window carried across runs, quiet-day email, last-run status, page-builder-only scan with match reasons.
