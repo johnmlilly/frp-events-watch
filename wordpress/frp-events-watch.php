@@ -2,10 +2,11 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.0.0
+ * Version: 1.2.0
  * Requires PHP: 7.4
+ * Author: John Lilly
+ * Author URI: https://johnlilly.dev
  *
- * Port of events_watch.py that runs inside WordPress, so Cloudflare is never involved.
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
  * With a Resend API key set, mail goes through Resend's API; otherwise through wp_mail.
  */
@@ -30,7 +31,8 @@ add_action('init', function () {
     }
 });
 add_action(FRP_WATCH_HOOK, function () {
-    frp_watch_run(true);
+    $run = frp_watch_run(true);
+    update_option('frp_watch_last_run', ['time' => time(), 'status' => $run['status']], false);
 });
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook(FRP_WATCH_HOOK);
@@ -68,27 +70,32 @@ function frp_watch_events($now) {
     return $events;
 }
 
-/** Rendered content plus raw content and meta (page builders keep their data in meta). */
+/**
+ * @return array [source name => text]: saved content, rendered content, and Avia builder data.
+ * Other meta (SEO descriptions, caches) can keep mentioning an event after it is removed from
+ * the page, so it is skipped.
+ */
 function frp_watch_page_text($id) {
     global $post;
     $page = get_post($id);
-    $text = $page->post_content;
+    $sources = ['saved content' => $page->post_content];
 
     $prev = $post;
     $post = $page;
     setup_postdata($page);
-    $text .= ' ' . apply_filters('the_content', $page->post_content);
+    $sources['rendered content'] = apply_filters('the_content', $page->post_content);
     $post = $prev;
     wp_reset_postdata();
 
-    foreach (get_post_meta($id) as $values) {
-        foreach ($values as $v) {
-            if (is_string($v)) {
-                $text .= ' ' . str_replace('\/', '/', $v);
-            }
+    // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
+    // to the default editor, so only read it while the Avia builder is active on the page.
+    if (get_post_meta($id, '_aviaLayoutBuilder_active', true) === 'active') {
+        $v = get_post_meta($id, '_aviaLayoutBuilderCleanData', true);
+        if (is_string($v) && $v !== '') {
+            $sources['builder data (_aviaLayoutBuilderCleanData)'] = $v;
         }
     }
-    return $text;
+    return $sources;
 }
 
 function frp_watch_pages() {
@@ -97,6 +104,10 @@ function frp_watch_pages() {
     foreach (FRP_WATCH_PAGES as $path) {
         if ($path === '/') {
             $id = get_option('show_on_front') === 'page' ? (int) get_option('page_on_front') : 0;
+            // Enfold can set the front page in its own theme options instead.
+            if (!$id && function_exists('avia_get_option')) {
+                $id = (int) avia_get_option('frontpage');
+            }
         } else {
             $id = url_to_postid(home_url($path));
         }
@@ -109,10 +120,58 @@ function frp_watch_pages() {
     return [$pages, $errors];
 }
 
-function frp_watch_mentions($event, $text) {
-    $slug = strtolower(basename(untrailingslashit($event['url'])));
-    return strpos(strtolower($text), "/event/$slug") !== false
-        || strpos(frp_watch_norm($text), frp_watch_norm($event['title'])) !== false;
+/**
+ * A link matches the event's own address, so a custom events slug or plain permalinks work, and
+ * it must end there: /event/retreat doesn't match /event/retreat-2026/. A title must stand alone:
+ * "Retreat" doesn't match "Retreats". Empty titles and addresses never match.
+ * @return string[] where on the page the event appears, e.g. ['Image link', 'Text block title'];
+ *                  empty when it doesn't. Uses the first source (saved content first) that mentions it.
+ */
+function frp_watch_mentions($event, $sources) {
+    $path = untrailingslashit(wp_make_link_relative($event['url']));
+    $link = $path !== '' ? '#' . preg_quote($path, '#') . '(?![\w-])#i' : null;
+    $title = frp_watch_norm($event['title']);
+    $named = $title !== '' ? '/(?<![\p{L}\p{N}])' . preg_quote($title, '/') . '(?![\p{L}\p{N}])/u' : null;
+    foreach ($sources as $text) {
+        $found = [];
+        if ($link && preg_match_all($link, $text, $m, PREG_OFFSET_CAPTURE)) {
+            foreach ($m[0] as [, $at]) {
+                $found[] = frp_watch_element($text, $at, 'link');
+            }
+        }
+        $norm = frp_watch_norm($text);
+        if ($named && preg_match_all($named, $norm, $m, PREG_OFFSET_CAPTURE)) {
+            foreach ($m[0] as [, $at]) {
+                $found[] = frp_watch_element($norm, $at, 'title');
+            }
+        }
+        if ($found) {
+            return array_values(array_unique($found));
+        }
+    }
+    return [];
+}
+
+/**
+ * Names the page element around $at: the innermost Avia element (its shortcode, e.g. [av_image ...]),
+ * or a plain "Link" / "Text" outside Avia.
+ */
+function frp_watch_element($text, $at, $kind) {
+    $names = ['av_image' => 'Image', 'av_button' => 'Button', 'av_button_big' => 'Big button (CTA)',
+              'av_buttonrow' => 'Button row', 'av_promobox' => 'Promo box (CTA)', 'av_icon_box' => 'Icon box',
+              'av_textblock' => 'Text block', 'av_heading' => 'Heading', 'av_slideshow' => 'Slideshow',
+              'av_slideshow_full' => 'Slideshow', 'av_masonry_entries' => 'Masonry', 'av_tab' => 'Tab',
+              'av_toggle' => 'Toggle', 'av_image_hotspot' => 'Image hotspot', 'av_hotspot' => 'Image hotspot',
+              'av_notification' => 'Notification box'];
+    $element = '';
+    if (preg_match_all('/\[(av_[a-z0-9_]+)/i', substr($text, 0, $at), $m)) {
+        $tag = strtolower(end($m[1]));
+        $element = $names[$tag] ?? ucfirst(str_replace('_', ' ', substr($tag, 3)));
+    }
+    if ($kind === 'link') {
+        return $element ? "$element link" : 'Link';
+    }
+    return ($element ?: 'Text') . ' (title)';
 }
 
 /**
@@ -126,16 +185,16 @@ function frp_watch_soon_from($now) {
 
 /**
  * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
- * @return array|null ['subject', 'summary', 'sections', 'complete'], or null when there is nothing
- *                    to report. complete is false when events could not be read.
+ * @return array ['subject', 'summary', 'sections', 'quiet', 'complete']. quiet is true when there is
+ *               nothing to report; complete is false when events could not be read.
  *                    Each section: ['key' => soon|stale|errors, 'title', 'items']; event items are
- *                    ['title', 'url', 'when', 'in_progress', 'pages' => [path => url]], error items
+ *                    ['title', 'url', 'when', 'in_progress', 'pages' => [path => ['url', 'how']]], error items
  *                    are strings.
  */
 function frp_watch_report($now, $soon_from) {
     $events = frp_watch_events($now);
     if (is_wp_error($events)) {
-        return ['subject' => 'FRP events watch: error', 'summary' => 'The check could not run.',
+        return ['subject' => 'FRP events watch: error', 'summary' => 'The check could not run.', 'quiet' => false,
                 'sections' => [['key' => 'errors', 'title' => 'Error', 'items' => [$events->get_error_message()]]],
                 'complete' => false];
     }
@@ -152,9 +211,9 @@ function frp_watch_report($now, $soon_from) {
     [$pages, $errors] = frp_watch_pages();
     $where = function ($e) use ($pages) {
         $hits = [];
-        foreach ($pages as $path => $text) {
-            if (frp_watch_mentions($e, $text)) {
-                $hits[$path] = home_url($path);
+        foreach ($pages as $path => $sources) {
+            if ($how = frp_watch_mentions($e, $sources)) {
+                $hits[$path] = ['url' => home_url($path), 'how' => $how];
             }
         }
         return $hits;
@@ -186,19 +245,23 @@ function frp_watch_report($now, $soon_from) {
     }
     $n_stale = count($items);
 
-    if (!$n_soon && !$n_stale) {
-        return null;
-    }
+    $quiet = !$n_soon && !$n_stale;
     if ($errors) {
         $sections[] = ['key' => 'errors', 'title' => 'Pages that could not be checked', 'items' => $errors];
     }
-    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live",
+    if ($quiet) {
+        return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
+                'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
+                           . ' hours, and no past events are on the tracked pages.',
+                'sections' => $sections];
+    }
+    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
             'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on the site',
             'sections' => $sections, 'complete' => true];
 }
 
 function frp_watch_render_text($report) {
-    $lines = [];
+    $lines = $report['quiet'] ? [$report['summary'], ''] : [];
     foreach ($report['sections'] as $s) {
         $lines[] = strtoupper($s['title']);
         foreach ($s['items'] as $item) {
@@ -208,14 +271,19 @@ function frp_watch_render_text($report) {
             }
             $lines[] = "- {$item['title']} ({$item['when']})";
             $lines[] = "  {$item['url']}";
-            $lines[] = '  On: ' . ($item['pages'] ? implode(', ', array_keys($item['pages'])) : 'not found on scanned pages');
+            if (!$item['pages']) {
+                $lines[] = '  On: not found on scanned pages';
+            }
+            foreach ($item['pages'] as $path => $page) {
+                $lines[] = "  On: $path (" . implode(', ', $page['how']) . ')';
+            }
         }
         $lines[] = '';
     }
     return rtrim(implode("\n", $lines));
 }
 
-/** Email-safe HTML: tables and inline styles only. Keep in step with render_html() in events_watch.py. */
+/** Email-safe HTML: tables and inline styles only. */
 function frp_watch_render_html($report, $footer_url) {
     $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'errors' => '#6b7280'];
     $font = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -235,13 +303,16 @@ function frp_watch_render_html($report, $footer_url) {
             $tag = $item['in_progress']
                 ? ' <span style="display:inline-block;font-size:11px;font-weight:600;color:#166534;background:#dcfce7;border-radius:10px;padding:1px 8px;vertical-align:middle;">In progress</span>'
                 : '';
+            // One line per page: the page as a link, then where on it the event appears.
             $chips = '';
-            foreach ($item['pages'] as $path => $url) {
-                $chips .= '<a href="' . $h($url) . '" style="display:inline-block;font-size:12px;color:#1f2a44;background:#eef2ff;border-radius:10px;padding:2px 9px;margin:2px 4px 2px 0;text-decoration:none;">'
-                        . $h($path) . '</a>';
+            foreach ($item['pages'] as $path => $page) {
+                $chips .= '<div style="margin-top:4px;">'
+                        . '<a href="' . $h($page['url']) . '" style="display:inline-block;font-size:12px;color:#1f2a44;background:#eef2ff;border-radius:10px;padding:2px 9px;margin-right:6px;text-decoration:none;">'
+                        . $h($path) . '</a>'
+                        . '<span style="font-size:12px;color:#6b7280;">' . $h(implode(' · ', $page['how'])) . '</span></div>';
             }
             if (!$chips) {
-                $chips = '<span style="color:#9ca3af;">Not on any tracked page</span>';
+                $chips = ' <span style="color:#9ca3af;">Not on any tracked page</span>';
             }
             $body .= "<div style=\"border-left:4px solid $c;background:#f9fafb;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:10px;\">"
                    . '<a href="' . $h($item['url']) . '" style="font-size:15px;font-weight:600;color:#111827;text-decoration:none;">' . $h($item['title']) . '</a>' . $tag
@@ -305,34 +376,38 @@ function frp_watch_mail($to, $subject, $text, $html = null) {
     return $code >= 200 && $code < 300 ?: "Resend returned $code: " . wp_remote_retrieve_body($r);
 }
 
+function frp_watch_quiet_email() {
+    return get_option('frp_watch_quiet_email', '1') === '1';
+}
+
 /**
- * Previews never move the soon window. A send moves it forward only once the report is
- * delivered (or there was nothing to report), so a failed run is retried next time.
- * @return array ['status', 'text', 'html'] for the admin page; html is null when there is nothing to report
+ * Previews never move the soon window. A send moves it forward only once the email is
+ * delivered (or skipped on a quiet day), so a failed run is retried next time.
+ * @return array ['status', 'text', 'html'] for the admin page
  */
 function frp_watch_run($send) {
     $now = time();
     $report = frp_watch_report($now, frp_watch_soon_from($now));
-    $done = !$report;
-    $status = $send ? 'Nothing to report, so nothing was sent.' : 'Preview only, not sent.';
-    $text = 'Nothing to report.';
-    $html = null;
-    if ($report) {
-        $report['date'] = wp_date('l, F j, Y', $now);
-        $text = frp_watch_render_text($report);
-        $html = frp_watch_render_html($report, admin_url('tools.php?page=frp-events-watch'));
-        if ($send) {
-            $to = frp_watch_recipient();
-            $ok = frp_watch_mail($to, $report['subject'], $text, $html);
-            $done = $ok === true && $report['complete'];
-            $status = $ok === true ? "Sent to $to." : "Failed sending to $to: $ok";
-        }
-        $text = $report['subject'] . "\n\n" . $text;
+    $report['date'] = wp_date('l, F j, Y', $now);
+    $text = frp_watch_render_text($report);
+    $html = frp_watch_render_html($report, admin_url('tools.php?page=frp-events-watch'));
+    $skip = $report['quiet'] && !frp_watch_quiet_email();
+
+    $done = true;
+    if (!$send) {
+        $status = 'Preview only, not sent.' . ($skip ? ' Quiet-day emails are off, so nothing would be sent today.' : '');
+    } elseif ($skip) {
+        $status = 'Nothing to report; quiet-day emails are off, so nothing was sent.';
+    } else {
+        $to = frp_watch_recipient();
+        $ok = frp_watch_mail($to, $report['subject'], $text, $html);
+        $done = $ok === true && $report['complete'];
+        $status = $ok === true ? "Sent to $to." : "Failed sending to $to: $ok";
     }
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
     }
-    return ['status' => $status, 'text' => $text, 'html' => $html];
+    return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html];
 }
 
 add_action('admin_menu', function () {
@@ -344,6 +419,7 @@ add_action('admin_menu', function () {
             $key = sanitize_text_field(wp_unslash($_POST['frp_watch_resend_key'] ?? ''));
             update_option('frp_watch_mail_to', $to, false);
             update_option('frp_watch_mail_from', $from, false);
+            update_option('frp_watch_quiet_email', empty($_POST['frp_watch_quiet_email']) ? '0' : '1', false);
             // Blank keeps the saved key; the remove box clears it.
             if (!empty($_POST['frp_watch_resend_clear'])) {
                 delete_option('frp_watch_resend_key');
@@ -360,6 +436,7 @@ add_action('admin_menu', function () {
         $send = isset($_POST['frp_watch_send']) && check_admin_referer('frp_watch');
         $next = wp_next_scheduled(FRP_WATCH_HOOK);
         $saved_key = get_option('frp_watch_resend_key');
+        $last = get_option('frp_watch_last_run');
         ?>
         <div class="wrap">
             <h1>FRP Events Watch</h1>
@@ -388,8 +465,18 @@ add_action('admin_menu', function () {
                            value="<?php echo esc_attr(get_option('frp_watch_mail_from', '')); ?>"
                            placeholder="onboarding@resend.dev">
                 </p>
+                <p>
+                    <label><input type="checkbox" name="frp_watch_quiet_email" value="1" <?php checked(frp_watch_quiet_email()); ?>>
+                        Email me on days with nothing to report</label>
+                </p>
                 <p><?php submit_button('Save', 'primary', 'frp_watch_save', false); ?></p>
-                <p>Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?></p>
+                <p>
+                    Next scheduled run: <?php echo $next ? esc_html(wp_date('D M j g:ia T', $next)) : 'not scheduled'; ?><br>
+                    Last scheduled run: <?php echo $last ? esc_html(wp_date('D M j g:ia T', $last['time']) . ' — ' . $last['status']) : 'never'; ?>
+                </p>
+                <?php if ($next && $next < time() - HOUR_IN_SECONDS) : ?>
+                    <div class="notice notice-warning inline"><p>The scheduled run is overdue, so WP-Cron doesn't seem to be firing. Check Tools → Site Health for scheduled event or loopback warnings.</p></div>
+                <?php endif; ?>
                 <p>
                     <?php submit_button('Send test email', 'secondary', 'frp_watch_test', false); ?>
                     <?php submit_button('Send report now', 'secondary', 'frp_watch_send', false); ?>
