@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.1.1
+ * Version: 1.1.2
  * Requires PHP: 7.4
  *
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
@@ -69,13 +69,10 @@ function frp_watch_events($now) {
 }
 
 /**
- * Page-builder meta keys that hold what the page shows. Other meta (SEO descriptions, caches,
- * old builder data) can keep mentioning an event after it is removed from the page, so it is skipped.
+ * @return array [source name => text]: saved content, rendered content, and Avia builder data.
+ * Other meta (SEO descriptions, caches) can keep mentioning an event after it is removed from
+ * the page, so it is skipped.
  */
-const FRP_WATCH_BUILDER_META = ['_elementor_data', '_fl_builder_data', '_bricks_page_content_2',
-                                'ct_builder_shortcodes', '_themify_builder_settings_json'];
-
-/** @return array [source name => text]: saved content, rendered content, and page-builder data */
 function frp_watch_page_text($id) {
     global $post;
     $page = get_post($id);
@@ -87,13 +84,6 @@ function frp_watch_page_text($id) {
     $sources['rendered content'] = apply_filters('the_content', $page->post_content);
     $post = $prev;
     wp_reset_postdata();
-
-    foreach (FRP_WATCH_BUILDER_META as $key) {
-        $v = get_post_meta($id, $key, true);
-        if (is_string($v) && $v !== '') {
-            $sources["builder data ($key)"] = str_replace('\/', '/', $v);
-        }
-    }
 
     // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
     // to the default editor, so only read it while the Avia builder is active on the page.

@@ -22,13 +22,13 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Step | What happens |
 |---|---|
 | 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
-| 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus page-builder data) and looks for each event by its URL slug or title. |
+| 2. Scan pages | Loads each page in `FRP_WATCH_PAGES` from the database (content plus Avia builder data) and looks for each event by its URL slug or title. |
 | 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. On days with nothing to report it sends a short all-clear, unless that's turned off in settings. |
 | Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. The Tools page previews both. |
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it checks page content and page-builder data only (`FRP_WATCH_BUILDER_META`, plus Avia/Enfold when active on the page), not headers, footers, sidebars, menus or SEO fields. The Tools page lists why each page matched (link or title, and where), which helps track down a stale mention.
+Limitation: it checks page content and Avia (Enfold) builder data only (while Avia is active on the page), not headers, footers, sidebars, menus or SEO fields. The Tools page lists why each page matched (link or title, and where), which helps track down a stale mention.
 
 ## Install
 
@@ -50,7 +50,7 @@ Limitation: it checks page content and page-builder data only (`FRP_WATCH_BUILDE
 
 ## Customize
 
-Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`, `FRP_WATCH_BUILDER_META`.
+Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`.
 
 ## Reuse on another site
 
@@ -58,6 +58,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.1.2:** scans Avia only; drops Elementor, Beaver Builder, Bricks, Oxygen and Themify.
 - **1.1.1:** reads Avia Layout Builder (Enfold) page data, only while Avia is active on the page.
 - **1.1.0:** recipient and Resend settings, HTML email, soon window carried across runs, quiet-day email, last-run status, page-builder-only scan with match reasons.
 - **1.0.0:** initial release.
