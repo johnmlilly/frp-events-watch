@@ -5,7 +5,6 @@
  * Version: 1.1.0
  * Requires PHP: 7.4
  *
- * Port of events_watch.py that runs inside WordPress, so Cloudflare is never involved.
  * Recipient, Resend settings, preview and manual send: Tools > FRP Events Watch.
  * With a Resend API key set, mail goes through Resend's API; otherwise through wp_mail.
  */
@@ -237,7 +236,7 @@ function frp_watch_render_text($report) {
     return rtrim(implode("\n", $lines));
 }
 
-/** Email-safe HTML: tables and inline styles only. Keep in step with render_html() in events_watch.py. */
+/** Email-safe HTML: tables and inline styles only. */
 function frp_watch_render_html($report, $footer_url) {
     $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'errors' => '#6b7280'];
     $font = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
