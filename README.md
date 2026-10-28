@@ -3,10 +3,7 @@
 ![WordPress plugin](https://img.shields.io/badge/WordPress-plugin-21759B?logo=wordpress&logoColor=white)
 ![PHP 7.4+](https://img.shields.io/badge/php-7.4%2B-777BB4?logo=php&logoColor=white)
 ![The Events Calendar](https://img.shields.io/badge/requires-The%20Events%20Calendar-21759B?logo=wordpress&logoColor=white)
-![WP-Cron](https://img.shields.io/badge/schedule-WP--Cron%20daily-21759B?logo=wordpress&logoColor=white)
-![HTML email](https://img.shields.io/badge/email-HTML%20%2B%20plain%20text-E34F26?logo=html5&logoColor=white)
 ![Resend](https://img.shields.io/badge/email-Resend-000000?logo=resend&logoColor=white)
-![Read-only](https://img.shields.io/badge/site%20access-read--only-2EA44F)
 
 WordPress plugin that runs a daily check of the [Family Renewal Project](https://www.familyrenewalproject.com/events/) events calendar. It emails a report when:
 
