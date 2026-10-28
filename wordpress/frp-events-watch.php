@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: FRP Events Watch
- * Description: Daily email listing events that start soon, past events still mentioned on key pages, and upcoming events missing their graphic. Read-only; never edits content.
- * Version: 1.7.0
+ * Description: Daily email listing events that start soon, past events still mentioned on key pages, upcoming events missing their graphic or not on any key page, and possible duplicates. Read-only; never edits content.
+ * Version: 1.8.0
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -23,6 +23,10 @@ const FRP_WATCH_PAGES = ['/', '/community/', '/families/', '/lcm/', '/lcw/', '/l
 // Images that don't count as an event's graphic, such as a ministry logo used while the flyer is
 // being made. An image matches when its address contains an entry (case doesn't matter).
 const FRP_WATCH_PLACEHOLDER_IMAGES = ['LGW_Logo_R_Horizontal'];
+// A missing graphic is urgent once the event starts within this many days.
+const FRP_WATCH_URGENT_DAYS = 7;
+// Events starting within this many days should be linked or named on a tracked page.
+const FRP_WATCH_PROMOTE_DAYS = 30;
 
 // Daily at 12:00 UTC. WP-Cron fires on the first site visit after that time.
 add_action('init', function () {
@@ -468,18 +472,20 @@ function frp_watch_soon_from($now) {
 
 /**
  * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
- * @return array ['subject', 'summary', 'sections', 'quiet', 'complete']. quiet is true when there is
- *               nothing to report; complete is false when events could not be read.
- *                    Each section: ['key' => soon|stale|graphics|errors, 'title', 'items']; event items are
- *                    ['title', 'url', 'when', 'in_progress', 'pages' => [place label => ['url', 'how']]], plus
- *                    'issue' in graphics (what's wrong with the graphic); error items are strings.
+ * @return array ['subject', 'summary', 'sections', 'quiet', 'complete', 'hidden']. quiet is true when there
+ *               is nothing to report; complete is false when events could not be read; hidden lists the IDs
+ *               of dismissed items left out.
+ *                    Each section: ['key' => soon|stale|graphics|unpromoted|duplicates|errors, 'title', 'items'];
+ *                    event items are ['title', 'url', 'when', 'in_progress', 'pages' => [place label => ['url', 'how']]],
+ *                    plus 'issue' (what's wrong) outside soon and stale, 'urgent' in graphics, and 'id' and
+ *                    'dismiss' (a link that hides the item) outside soon; error items are strings.
  */
 function frp_watch_report($now, $soon_from) {
     $events = frp_watch_events($now);
     if (is_wp_error($events)) {
         return ['subject' => 'FRP events watch: error', 'summary' => 'The check could not run.', 'quiet' => false,
                 'sections' => [['key' => 'errors', 'title' => 'Error', 'items' => [$events->get_error_message()]]],
-                'complete' => false];
+                'complete' => false, 'hidden' => []];
     }
     $soon_until = $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS;
     $fetched = [];
@@ -495,13 +501,15 @@ function frp_watch_report($now, $soon_from) {
     });
     uasort($soon, function ($a, $b) { return $a['start'] <=> $b['start']; });
 
-    // Titles are searched for events starting soon and events that ended within the lookback. A past
-    // event's title also names the next date of a recurring event, so it is searched only when no
-    // event that hasn't ended shares it. Links are found for every event, however old.
+    // Titles are searched for events that haven't ended and start within FRP_WATCH_PROMOTE_DAYS (which
+    // covers those starting soon), and events that ended within the lookback. A past event's title also
+    // names the next date of a recurring event, so it is searched only when no event that hasn't ended
+    // shares it. Links are found for every event, however old.
+    $promote_until = $now + FRP_WATCH_PROMOTE_DAYS * DAY_IN_SECONDS;
     $titles = [];
     foreach ($fetched as $key => $e) {
-        $past = $e['end'] < $now && !isset($live[frp_watch_norm($e['title'])]);
-        if ((isset($soon[$key]) || $past) && ($re = frp_watch_title_re($e['title']))) {
+        $search = $e['end'] >= $now ? $e['start'] <= $promote_until : !isset($live[frp_watch_norm($e['title'])]);
+        if ($search && ($re = frp_watch_title_re($e['title']))) {
             $titles[$key] = $re;
         }
     }
@@ -516,10 +524,7 @@ function frp_watch_report($now, $soon_from) {
                     'when' => ($started ? 'started ' : '') . wp_date('D M j g:ia T', $e['start']),
                     'pages' => $hits[$key] ?? []];
     }
-    if ($items) {
-        $sections[] = ['key' => 'soon', 'title' => 'Starting within ' . FRP_WATCH_SOON_HOURS . ' hours', 'items' => $items];
-    }
-    $n_soon = count($items);
+    $sections['soon'] = $items;
 
     $items = [];
     foreach ($hits as $key => $pages) {
@@ -531,54 +536,154 @@ function frp_watch_report($now, $soon_from) {
             $item = frp_watch_resolve($key, $fetched, $now);
         }
         if ($item) {
-            $items[] = $item + ['in_progress' => false, 'pages' => $pages];
+            $labels = array_keys($pages);
+            sort($labels);
+            $items[] = $item + ['in_progress' => false, 'pages' => $pages,
+                                'id' => frp_watch_item_id('stale', $key . '|' . implode(',', $labels))];
         }
     }
     usort($items, function ($a, $b) { return $a['sort'] <=> $b['sort']; });
-    if ($items) {
-        $sections[] = ['key' => 'stale', 'title' => 'Past but still on site', 'items' => $items];
-    }
-    $n_stale = count($items);
+    $sections['stale'] = $items;
 
-    // Every event that hasn't ended needs its graphic. The dates of a recurring event share one
-    // description, so it's listed once, at its next date.
+    // The dates of a recurring event share one description and one series link, so the checks below
+    // list it once, at its next date.
     $upcoming = array_filter($fetched, function ($e) use ($now) { return $e['end'] >= $now; });
     uasort($upcoming, function ($a, $b) { return $a['start'] <=> $b['start']; });
-    $items = [];
-    $seen = [];
+    $next = [];
+    foreach ($upcoming as $key => $e) {
+        $next[explode('/', $key)[0]] = $next[explode('/', $key)[0]] ?? $key;
+    }
+    $promoted = [];
+    foreach (array_keys($hits) as $key) {
+        $promoted[explode('/', $key)[0]] = true;
+    }
+    $upcoming_item = function ($e, $issue) use ($now) {
+        $started = $e['start'] < $now;
+        return ['title' => $e['title'], 'url' => $e['url'], 'in_progress' => $started, 'pages' => [],
+                'when' => ($started ? 'started ' : 'starts ') . wp_date('D M j', $e['start']), 'issue' => $issue];
+    };
+    $graphics = [];
+    $unpromoted = [];
+    foreach ($next as $series => $key) {
+        $e = $upcoming[$key];
+        // Every event that hasn't ended needs its graphic, urgently once it starts within FRP_WATCH_URGENT_DAYS.
+        if ($issue = frp_watch_graphic($e)) {
+            $graphics[] = $upcoming_item($e, $issue) + ['id' => frp_watch_item_id('graphics', "$series|$issue"),
+                                                        'urgent' => $e['start'] <= $now + FRP_WATCH_URGENT_DAYS * DAY_IN_SECONDS];
+        }
+        // An event starting soon already says when it's on no tracked page.
+        if ($e['start'] <= $promote_until && !isset($promoted[$series]) && !isset($soon[$key])) {
+            $unpromoted[] = $upcoming_item($e, 'Not linked or named on any tracked page, menu or widget')
+                          + ['id' => frp_watch_item_id('unpromoted', $series)];
+        }
+    }
+    $sections['graphics'] = $graphics;
+    $sections['unpromoted'] = $unpromoted;
+
+    // Two events (not dates of one recurring event) with the same title on the same day.
+    $days = [];
     foreach ($upcoming as $key => $e) {
         $series = explode('/', $key)[0];
-        if (isset($seen[$series])) {
-            continue;
-        }
-        $seen[$series] = true;
-        if ($issue = frp_watch_graphic($e)) {
-            $started = $e['start'] < $now;
-            $items[] = ['title' => $e['title'], 'url' => $e['url'], 'in_progress' => $started, 'pages' => [],
-                        'when' => ($started ? 'started ' : 'starts ') . wp_date('D M j', $e['start']), 'issue' => $issue];
+        $day = frp_watch_norm($e['title']) . '|' . wp_date('Y-m-d', $e['start']);
+        $days[$day][$series] = $days[$day][$series] ?? $e;
+    }
+    $items = [];
+    foreach ($days as $group) {
+        if (count($group) > 1) {
+            $series = array_keys($group);
+            sort($series);
+            $first = array_shift($group);
+            $items[] = $upcoming_item($first, 'Same title and day as ' . implode(', ', array_column($group, 'url')))
+                     + ['id' => frp_watch_item_id('duplicates', implode(',', $series))];
         }
     }
-    if ($items) {
-        $sections[] = ['key' => 'graphics', 'title' => 'Missing a graphic', 'items' => $items];
-    }
-    $n_graphics = count($items);
+    $sections['duplicates'] = $items;
+    $sections['errors'] = $errors;
 
-    $quiet = !$n_soon && !$n_stale && !$n_graphics;
-    if ($errors) {
-        $sections[] = ['key' => 'errors', 'title' => 'Pages that could not be checked', 'items' => $errors];
+    // An urgent missing graphic goes first.
+    if (array_filter(array_column($graphics, 'urgent'))) {
+        $sections = ['graphics' => $graphics] + $sections;
     }
-    if ($quiet) {
-        return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
-                'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
-                           . ' hours, no past events are on the tracked pages, and every upcoming event has a graphic.',
-                'sections' => $sections];
+
+    // Dismissed items are left out until what's reported about them changes, which gives them a new ID.
+    $dismissed = (array) get_option('frp_watch_dismissed', []);
+    $hidden = [];
+    $kept = [];
+    foreach ($sections as $key => $items) {
+        $show = [];
+        foreach ($items as $item) {
+            if (is_array($item) && isset($item['id'], $dismissed[$item['id']])) {
+                $hidden[] = $item['id'];
+                continue;
+            }
+            if (is_array($item) && isset($item['id'])) {
+                $item['dismiss'] = frp_watch_dismiss_url($item['id'], $key, $item['title']);
+            }
+            $show[] = $item;
+        }
+        if ($show) {
+            $kept[] = ['key' => $key, 'title' => frp_watch_section_title($key), 'items' => $show];
+        }
     }
-    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live"
-                       . ($n_graphics ? ", $n_graphics missing " . ($n_graphics === 1 ? 'a graphic' : 'graphics') : ''),
-            'quiet' => false,
-            'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on tracked pages'
-                       . ($n_graphics ? " · $n_graphics missing " . ($n_graphics === 1 ? 'a graphic' : 'graphics') : ''),
-            'sections' => $sections, 'complete' => true];
+    $count = function ($key) use ($kept) {
+        foreach ($kept as $s) {
+            if ($s['key'] === $key) {
+                return count($s['items']);
+            }
+        }
+        return 0;
+    };
+    $n_soon = $count('soon');
+    $n_stale = $count('stale');
+    $n_graphics = $count('graphics');
+    $urgent = 0;
+    foreach ($kept as $s) {
+        $urgent += $s['key'] === 'graphics' ? count(array_filter(array_column($s['items'], 'urgent'))) : 0;
+    }
+    $extra = array_filter([
+        $n_graphics ? "$n_graphics missing " . ($n_graphics === 1 ? 'a graphic' : 'graphics') : '',
+        ($n = $count('unpromoted')) ? "$n not on tracked pages" : '',
+        ($n = $count('duplicates')) ? "$n possible " . ($n === 1 ? 'duplicate' : 'duplicates') : '',
+    ]);
+    $report = ['sections' => $kept, 'complete' => true, 'hidden' => $hidden];
+    if (!$n_soon && !$n_stale && !$extra) {
+        return $report + ['subject' => 'FRP events: nothing to report', 'quiet' => true,
+                          'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
+                                     . ' hours, no past events are on the tracked pages, and every upcoming event has a graphic.'];
+    }
+    return $report + ['quiet' => false,
+                      'subject' => ($urgent ? 'Urgent: ' : '') . "FRP events: $n_soon soon, $n_stale past still live"
+                                 . ($extra ? ', ' . implode(', ', $extra) : ''),
+                      'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events')
+                                 . ' still on tracked pages' . ($extra ? ' · ' . implode(' · ', $extra) : '')];
+}
+
+function frp_watch_section_title($key) {
+    $titles = ['soon' => 'Starting within ' . FRP_WATCH_SOON_HOURS . ' hours', 'stale' => 'Past but still on site',
+               'graphics' => 'Missing a graphic', 'unpromoted' => 'Coming up but not on any tracked page',
+               'duplicates' => 'Possible duplicates', 'errors' => 'Pages that could not be checked'];
+    return $titles[$key] ?? $key;
+}
+
+/** A report item's ID: the same while what's reported about it stays the same. */
+function frp_watch_item_id($section, $what) {
+    return substr(md5("$section|$what"), 0, 12);
+}
+
+/** Signs a dismiss link, so only links from a report work. */
+function frp_watch_dismiss_token($id, $section, $title) {
+    return substr(hash_hmac('sha256', "$id|$section|$title", wp_salt('auth')), 0, 24);
+}
+
+/** Anyone with the link can dismiss the item, so recipients needn't log in to WordPress. */
+function frp_watch_dismiss_url($id, $section, $title) {
+    return admin_url('admin-post.php') . '?' . http_build_query([
+        'action' => 'frp_watch_dismiss', 'item' => $id, 's' => $section, 'title' => $title,
+        't' => frp_watch_dismiss_token($id, $section, $title)]);
+}
+
+function frp_watch_hidden_note($n) {
+    return $n === 1 ? '1 dismissed item is hidden.' : "$n dismissed items are hidden.";
 }
 
 function frp_watch_render_text($report) {
@@ -590,27 +695,32 @@ function frp_watch_render_text($report) {
                 $lines[] = "- $item";
                 continue;
             }
-            $lines[] = "- {$item['title']} ({$item['when']})";
+            $lines[] = "- {$item['title']} ({$item['when']})" . (empty($item['urgent']) ? '' : ' URGENT');
             $lines[] = "  {$item['url']}";
             if (isset($item['issue'])) {
                 $lines[] = "  {$item['issue']}";
-                continue;
-            }
-            if (!$item['pages']) {
+            } elseif (!$item['pages']) {
                 $lines[] = '  On: not found on tracked pages';
             }
-            foreach ($item['pages'] as $path => $page) {
+            foreach (isset($item['issue']) ? [] : $item['pages'] as $path => $page) {
                 $lines[] = "  On: $path (" . implode(', ', $page['how']) . ')';
+            }
+            if (isset($item['dismiss'])) {
+                $lines[] = "  Dismiss: {$item['dismiss']}";
             }
         }
         $lines[] = '';
+    }
+    if ($n = count($report['hidden'])) {
+        $lines[] = frp_watch_hidden_note($n) . ' Restore them in Tools > FRP Events Watch.';
     }
     return rtrim(implode("\n", $lines));
 }
 
 /** Email-safe HTML: tables and inline styles only. */
 function frp_watch_render_html($report, $footer_url) {
-    $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'graphics' => '#7c3aed', 'errors' => '#6b7280'];
+    $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'graphics' => '#7c3aed', 'unpromoted' => '#0891b2',
+               'duplicates' => '#db2777', 'errors' => '#6b7280'];
     $font = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
     $h = function ($s) { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); };
 
@@ -625,9 +735,11 @@ function frp_watch_render_html($report, $footer_url) {
                 $body .= '<div style="font-size:13px;color:#6b7280;margin-bottom:4px;">' . $h($item) . '</div>';
                 continue;
             }
-            $tag = $item['in_progress']
-                ? ' <span style="display:inline-block;font-size:11px;font-weight:600;color:#166534;background:#dcfce7;border-radius:10px;padding:1px 8px;vertical-align:middle;">In progress</span>'
-                : '';
+            $tag = ($item['in_progress']
+                    ? ' <span style="display:inline-block;font-size:11px;font-weight:600;color:#166534;background:#dcfce7;border-radius:10px;padding:1px 8px;vertical-align:middle;">In progress</span>'
+                    : '')
+                 . (empty($item['urgent']) ? ''
+                    : ' <span style="display:inline-block;font-size:11px;font-weight:600;color:#991b1b;background:#fee2e2;border-radius:10px;padding:1px 8px;vertical-align:middle;">Urgent</span>');
             // One line per page: the page as a link, then where on it the event appears.
             $chips = '';
             foreach ($item['pages'] as $path => $page) {
@@ -645,12 +757,16 @@ function frp_watch_render_html($report, $footer_url) {
                    . (isset($item['issue'])
                        ? '<div style="font-size:13px;color:#374151;margin-top:6px;">' . $h($item['issue']) . '</div>'
                        : '<div style="font-size:13px;color:#374151;margin-top:6px;">On: ' . $chips . '</div>')
+                   . (isset($item['dismiss'])
+                       ? '<div style="margin-top:6px;"><a href="' . $h($item['dismiss']) . '" style="font-size:12px;color:#6b7280;">Dismiss</a></div>'
+                       : '')
                    . '</div>';
         }
         $body .= '</td></tr>';
     }
 
-    $footer = 'Sent by FRP Events Watch' . ($footer_url ? ' · <a href="' . $h($footer_url) . '" style="color:#6b7280;">Settings</a>' : '');
+    $footer = ($report['hidden'] ? $h(frp_watch_hidden_note(count($report['hidden']))) . '<br>' : '')
+            . 'Sent by FRP Events Watch' . ($footer_url ? ' · <a href="' . $h($footer_url) . '" style="color:#6b7280;">Settings</a>' : '');
     return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . $h($report['subject']) . '</title></head>'
          . '<body style="margin:0;padding:0;background:#f4f5f7;">'
          . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;"><tr><td align="center" style="padding:24px 12px;">'
@@ -728,6 +844,15 @@ function frp_watch_quiet_email() {
     return get_option('frp_watch_quiet_email', '1') === '1';
 }
 
+/** Forgets dismissed items a report no longer has (fixed, ended, or changed); $hidden is the report's. */
+function frp_watch_prune_dismissed($hidden) {
+    $dismissed = (array) get_option('frp_watch_dismissed', []);
+    $still = array_intersect_key($dismissed, array_flip($hidden));
+    if (count($still) !== count($dismissed)) {
+        update_option('frp_watch_dismissed', $still, false);
+    }
+}
+
 /**
  * Previews never move the soon window. A send moves it forward only once the email is
  * delivered (or skipped on a quiet day), so a failed run is retried next time.
@@ -755,8 +880,45 @@ function frp_watch_run($send) {
     }
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
+        frp_watch_prune_dismissed($report['hidden']);
     }
     return ['status' => $status, 'text' => $report['subject'] . "\n\n" . $text, 'html' => $html];
+}
+
+/**
+ * The page a dismiss link opens. Opening the link only asks: the item is dismissed when the button is
+ * pressed, since mail scanners open the links in an email on their own.
+ * @param array $req the link's item, s (section), title and t (token)
+ * @return array [HTTP status, page HTML]
+ */
+function frp_watch_dismiss_page($req, $confirmed) {
+    $id = (string) ($req['item'] ?? '');
+    $section = (string) ($req['s'] ?? '');
+    $title = (string) ($req['title'] ?? '');
+    $token = (string) ($req['t'] ?? '');
+    if (!preg_match('/^[a-f0-9]{12}$/', $id) || !hash_equals(frp_watch_dismiss_token($id, $section, $title), $token)) {
+        return [403, "<p>This dismiss link isn't valid. Use the link in a recent report.</p>"];
+    }
+    $what = '<strong>' . esc_html($title) . '</strong> (' . esc_html(frp_watch_section_title($section)) . ')';
+    if (!$confirmed) {
+        $fields = '';
+        foreach (['action' => 'frp_watch_dismiss', 'item' => $id, 's' => $section, 'title' => $title, 't' => $token] as $k => $v) {
+            $fields .= '<input type="hidden" name="' . esc_attr($k) . '" value="' . esc_attr($v) . '">';
+        }
+        return [200, "<p>Hide $what from FRP Events Watch reports? It comes back if what's reported about it changes.</p>"
+                   . '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">' . $fields
+                   . '<button type="submit" class="button">Dismiss</button></form>'];
+    }
+    $dismissed = (array) get_option('frp_watch_dismissed', []);
+    $dismissed[$id] = ['title' => $title, 'section' => $section, 'time' => time()];
+    update_option('frp_watch_dismissed', $dismissed, false);
+    return [200, "<p>Dismissed $what. Restore it in Tools &gt; FRP Events Watch.</p>"];
+}
+foreach (['admin_post_frp_watch_dismiss', 'admin_post_nopriv_frp_watch_dismiss'] as $hook) {
+    add_action($hook, function () {
+        [$status, $html] = frp_watch_dismiss_page(wp_unslash($_POST + $_GET), ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST');
+        wp_die($html, 'FRP Events Watch', ['response' => $status]);
+    });
 }
 
 // The form posts here and redirects back, so refreshing the Tools page never repeats a send.
@@ -788,6 +950,12 @@ add_action('admin_post_frp_watch', function () {
         $notice = $ok === true ? "Test email sent to $list. Check spam if it doesn't arrive." : "Failed sending to $list: $ok";
     } elseif (isset($_POST['frp_watch_send'])) {
         $notice = 'Report: ' . frp_watch_run(true)['status'];
+    } elseif (isset($_POST['frp_watch_restore'])) {
+        $dismissed = (array) get_option('frp_watch_dismissed', []);
+        $id = sanitize_key(wp_unslash($_POST['frp_watch_restore']));
+        $notice = isset($dismissed[$id]) ? "Restored {$dismissed[$id]['title']}; it shows in the next report if it still applies." : '';
+        unset($dismissed[$id]);
+        update_option('frp_watch_dismissed', $dismissed, false);
     }
     set_transient('frp_watch_notice_' . get_current_user_id(), $notice, MINUTE_IN_SECONDS);
     wp_safe_redirect(frp_watch_admin_url());
@@ -849,6 +1017,17 @@ add_action('admin_menu', function () {
                     <?php submit_button('Send report now', 'secondary', 'frp_watch_send', false); ?>
                     <a class="button" href="<?php echo esc_url(frp_watch_admin_url(['preview' => 1])); ?>#frp-watch-preview">Preview report</a>
                 </p>
+                <?php $dismissed = (array) get_option('frp_watch_dismissed', []); ?>
+                <?php if ($dismissed) : ?>
+                    <h2>Dismissed</h2>
+                    <p>Hidden from reports until what's reported about them changes.</p>
+                    <ul>
+                        <?php foreach ($dismissed as $id => $d) : ?>
+                            <li><?php echo esc_html($d['title'] . ' — ' . frp_watch_section_title($d['section']) . ', dismissed ' . wp_date('M j', $d['time'])); ?>
+                                <button type="submit" class="button-link" name="frp_watch_restore" value="<?php echo esc_attr($id); ?>">Restore</button></li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
             </form>
             <?php if ($preview) : ?>
                 <?php $run = frp_watch_run(false); ?>

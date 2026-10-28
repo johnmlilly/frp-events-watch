@@ -133,6 +133,12 @@ abstract class FrpTestCase extends TestCase {
         Functions\when('wp_get_attachment_url')->alias(function ($id) {
             return $id ? self::HOME . "/wp-content/uploads/attachment-$id.png" : false;
         });
+        Functions\when('wp_salt')->justReturn('test-salt');
+        Functions\when('update_option')->alias(function ($name, $value) use ($test) {
+            $test->options[$name] = $value;
+            return true;
+        });
+        Functions\stubEscapeFunctions();
         Functions\when('sanitize_email')->alias(function ($s) {
             return preg_replace('/[^a-z0-9+_.@-]/i', '', $s);
         });

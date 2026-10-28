@@ -91,14 +91,15 @@ class GraphicsTest extends FrpTestCase {
     }
 
     public function test_missing_graphic_is_not_a_quiet_day_and_shows_in_the_email() {
-        $this->fetched = [$this->event(407, 'Potluck', '/event/potluck/', 24 * 24, 24 * 24 + 3, '')];
+        // Past FRP_WATCH_PROMOTE_DAYS, so it isn't also listed as not on a tracked page.
+        $this->fetched = [$this->event(407, 'Potluck', '/event/potluck/', 40 * 24, 40 * 24 + 3, '')];
         $report = frp_watch_report(self::NOW, self::NOW - 1);
         $report['date'] = 'Tuesday';
         $this->assertFalse($report['quiet']);
         $this->assertSame('FRP events: 0 soon, 0 past still live, 1 missing a graphic', $report['subject']);
 
         $text = frp_watch_render_text($report);
-        $this->assertStringContainsString("MISSING A GRAPHIC\n- Potluck (starts Fri Nov 20)\n  " . self::HOME . "/event/potluck/\n  No graphic", $text);
+        $this->assertStringContainsString("MISSING A GRAPHIC\n- Potluck (starts Sun Dec 6)\n  " . self::HOME . "/event/potluck/\n  No graphic", $text);
         $this->assertStringNotContainsString('On:', $text);
         $html = frp_watch_render_html($report, '');
         $this->assertStringContainsString('No graphic', $html);
