@@ -77,6 +77,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.6.0:** unit tests (PHPUnit + Brain Monkey) run in CI on PHP 7.4 and 8.3 before the zip is built; the build workflow uses Node 24 actions and uploads the plugin zip directly. No change to what the plugin reports.
 - **1.5.1:** no longer reads Avia's stored builder copy (`_aviaLayoutBuilderCleanData`), which can keep links the page no longer shows. Pages are read from their saved content only.
 - **1.5.0:** scans only the pages in `FRP_WATCH_PAGES` again (plus menus and widgets), instead of every post and page; pages that can't be found are listed in the email. Link detection from 1.4.0 is unchanged.
 - **1.4.1:** titles of past events are searched for 30 days after they end (was 14).
