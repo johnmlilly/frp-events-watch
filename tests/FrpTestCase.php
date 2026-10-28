@@ -99,6 +99,7 @@ abstract class FrpTestCase extends TestCase {
             $s = $p->start ?? strtotime(self::EVENTS[$p->ID][3] . ' UTC');
             $e = $p->end ?? strtotime(self::EVENTS[$p->ID][4] . ' UTC');
             return (object) ['ID' => $p->ID, 'post_title' => $p->post_title, 'url' => $p->url ?? null,
+                             'post_content' => $p->post_content ?? '', 'thumb' => $p->thumb ?? 0,
                              'dates' => (object) ['start_utc' => new DateTimeImmutable("@$s"),
                                                   'end_utc' => new DateTimeImmutable("@$e")]];
         });
@@ -117,13 +118,26 @@ abstract class FrpTestCase extends TestCase {
                 public function all() {
                     return array_map(function ($e) {
                         return (object) ['ID' => $e['id'], 'post_title' => $e['title'], 'url' => $e['url'],
-                                         'start' => $e['start'], 'end' => $e['end']];
+                                         'start' => $e['start'], 'end' => $e['end'],
+                                         'post_content' => $e['content'], 'thumb' => $e['thumb']];
                     }, $this->events);
                 }
             };
         });
         Functions\when('is_wp_error')->alias(function ($v) {
             return $v instanceof WP_Error;
+        });
+        Functions\when('get_post_thumbnail_id')->alias(function ($p) {
+            return $p->thumb ?? 0;
+        });
+        Functions\when('wp_get_attachment_url')->alias(function ($id) {
+            return $id ? self::HOME . "/wp-content/uploads/attachment-$id.png" : false;
+        });
+        Functions\when('sanitize_email')->alias(function ($s) {
+            return preg_replace('/[^a-z0-9+_.@-]/i', '', $s);
+        });
+        Functions\when('is_email')->alias(function ($s) {
+            return filter_var($s, FILTER_VALIDATE_EMAIL) ? $s : false;
         });
     }
 
@@ -151,10 +165,16 @@ abstract class FrpTestCase extends TestCase {
         }
     }
 
-    /** An event as tribe_events() returns it; times are hours from NOW. */
-    protected function event($id, $title, $path, $start_hours, $end_hours) {
+    const FLYER = '<img src="https://www.familyrenewalproject.com/wp-content/uploads/2026/10/flyer.png" alt="">';
+
+    /**
+     * An event as tribe_events() returns it; times are hours from NOW. Its description has a flyer
+     * unless $content says otherwise; $thumb is its featured image ID.
+     */
+    protected function event($id, $title, $path, $start_hours, $end_hours, $content = self::FLYER, $thumb = 0) {
         return ['id' => $id, 'title' => $title, 'url' => self::HOME . $path,
                 'start' => self::NOW + (int) ($start_hours * HOUR_IN_SECONDS),
-                'end' => self::NOW + (int) ($end_hours * HOUR_IN_SECONDS)];
+                'end' => self::NOW + (int) ($end_hours * HOUR_IN_SECONDS),
+                'content' => $content, 'thumb' => $thumb];
     }
 }
