@@ -7,8 +7,9 @@
 
 WordPress plugin that runs a daily check of the [Family Renewal Project](https://www.familyrenewalproject.com/events/) events calendar. It emails a report when:
 
-- an event **starts within 24 hours**, or
-- an event **has already ended** but is still mentioned on one of the tracked site pages.
+- an event **starts within 24 hours**,
+- an event **has already ended** but is still mentioned on one of the tracked site pages, or
+- an upcoming event **has no graphic** yet (the flyer is made after the event page goes up, since it carries the page's tinyURL and QR code, so it's easy to forget).
 
 It only reports. It never edits WordPress. It runs inside the site, so Cloudflare bot protection doesn't get in the way.
 
@@ -20,12 +21,13 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 |---|---|
 | 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
 | 2. Scan pages | Reads each page in `FRP_WATCH_PAGES` from the database (saved content), plus every nav menu and active widget (they show on those pages too), and finds every link to an event: full or relative URLs, plain permalinks, and Avia's internal links (which store the event's ID, not its URL). Each linked event is checked however long ago it ended, and a link to an unpublished or deleted event is reported too. Titles, as a whole phrase, are searched for events starting soon and events that ended in the last 30 days; a past event whose title an upcoming event shares (a recurring event) is matched by link only. |
-| 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. On days with nothing to report it sends a short all-clear, unless that's turned off in settings. |
+| 3. Check graphics | Every event that hasn't ended needs an image in its saved description (an `<img>`, a block-editor image, or an Avia image element); a featured image counts too. Images whose address contains an entry of `FRP_WATCH_PLACEHOLDER_IMAGES` (such as the Life-Giving Wounds logo) don't count. An image on another site (a Facebook link, say) is flagged too, since it can stop loading. A recurring event is listed once, at its next date. |
+| 4. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. On days with nothing to report it sends a short all-clear, unless that's turned off in settings. |
 | Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. The Tools page previews both. |
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it reads saved content (including Avia shortcodes), menus and widgets, not Avia's separate stored builder copy. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). A past event mentioned by title only, with no link, is caught only for 30 days after it ends. Leftovers in Avia element settings that the page never shows are ignored: an empty image element (no image source) and a `*_dynamic` setting such as `link_dynamic` whose plain setting (`link`) is empty. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
+Limitation: it reads saved content (including Avia shortcodes), menus and widgets, not Avia's separate stored builder copy. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). A past event mentioned by title only, with no link, is caught only for 30 days after it ends. Leftovers in Avia element settings that the page never shows are ignored: an empty image element (no image source) and a `*_dynamic` setting such as `link_dynamic` whose plain setting (`link`) is empty. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention. The graphic check can't tell a flyer from other images: an event with only a speaker photo counts as having a graphic.
 
 ## Install
 
@@ -60,7 +62,7 @@ mkdir -p dist/frp-events-watch && cp wordpress/frp-events-watch.php dist/frp-eve
 
 ## Settings (Tools → FRP Events Watch)
 
-- **Send reports to:** recipient. Falls back to the site admin email.
+- **Send reports to:** one or more addresses, separated by commas. Everyone gets the same email and sees the full list. Entries that aren't email addresses are left out (the save notice names them). Blank uses the site admin email. With Resend, sending to anyone other than your Resend account's own address needs a From address on a verified domain.
 - **Resend API key:** optional. When set, only this plugin's mail goes through Resend; the rest of the site's mail is untouched. Use a dedicated key, since other admins can read it from the database.
 - **From address:** must be on a domain verified in Resend. Blank uses `onboarding@resend.dev`, which only delivers to your Resend account's email.
 - **Email me on days with nothing to report:** on by default. Sends a short all-clear so you know the job ran.
@@ -69,7 +71,7 @@ mkdir -p dist/frp-events-watch && cp wordpress/frp-events-watch.php dist/frp-eve
 
 ## Customize
 
-Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`.
+Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`, `FRP_WATCH_PLACEHOLDER_IMAGES`. A placeholder entry is any part of the image's file name or address, so `LGW_Logo_R_Horizontal` matches every size of that logo. An event that has a placeholder and its own flyer counts as having a graphic.
 
 ## Reuse on another site
 
@@ -77,6 +79,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.7.0:** new "Missing a graphic" section lists upcoming events with no image in their description, only a placeholder image, or an image hosted on another site. Reports can go to several addresses (comma-separated).
 - **1.6.1:** ignores Avia leftovers the page never shows: matches inside an image element with no image, and in `link_dynamic` (or any `*_dynamic` setting) when `link` is empty. These were reported as "Image link" on pages with nothing visible to remove.
 - **1.6.0:** unit tests (PHPUnit + Brain Monkey) run in CI on PHP 7.4 and 8.3 before the zip is built; the build workflow uses Node 24 actions and uploads the plugin zip directly. No change to what the plugin reports.
 - **1.5.1:** no longer reads Avia's stored builder copy (`_aviaLayoutBuilderCleanData`), which can keep links the page no longer shows. Pages are read from their saved content only.

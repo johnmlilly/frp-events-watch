@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: FRP Events Watch
- * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.6.1
+ * Description: Daily email listing events that start soon, past events still mentioned on key pages, and upcoming events missing their graphic. Read-only; never edits content.
+ * Version: 1.7.0
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -20,6 +20,9 @@ const FRP_WATCH_PAST_LOOKBACK_DAYS = 30;
 // Pages that carry time-sensitive event info. Edit freely.
 const FRP_WATCH_PAGES = ['/', '/community/', '/families/', '/lcm/', '/lcw/', '/lgw/',
                          '/thewayoftrust/', '/prayer/', '/courses/', '/gsc/'];
+// Images that don't count as an event's graphic, such as a ministry logo used while the flyer is
+// being made. An image matches when its address contains an entry (case doesn't matter).
+const FRP_WATCH_PLACEHOLDER_IMAGES = ['LGW_Logo_R_Horizontal'];
 
 // Daily at 12:00 UTC. WP-Cron fires on the first site visit after that time.
 add_action('init', function () {
@@ -70,7 +73,8 @@ function frp_watch_norm($s) {
 /**
  * Events and dates of recurring events that end after the lookback start and start within a year.
  * The far end tells which titles and links still belong to an event to come.
- * @return array|WP_Error list of ['id', 'title', 'url', 'start', 'end'] with UTC timestamps
+ * @return array|WP_Error list of ['id', 'title', 'url', 'start', 'end', 'content', 'thumb'] with UTC
+ *                        timestamps; content is the saved description, thumb the featured image ID
  */
 function frp_watch_events($now) {
     if (!function_exists('tribe_events') || !function_exists('tribe_get_event')) {
@@ -91,9 +95,57 @@ function frp_watch_events($now) {
         $start = $e->dates->start_utc->getTimestamp();
         $end = empty($e->dates->end_utc) ? $start : $e->dates->end_utc->getTimestamp();
         $events[] = ['id' => $e->ID, 'title' => html_entity_decode(get_the_title($e), ENT_QUOTES, 'UTF-8'),
-                     'url' => get_permalink($e), 'start' => $start, 'end' => $end];
+                     'url' => get_permalink($e), 'start' => $start, 'end' => $end,
+                     'content' => (string) ($e->post_content ?? ''), 'thumb' => (int) get_post_thumbnail_id($e)];
     }
     return $events;
+}
+
+/**
+ * What's wrong with an event's graphic, which goes in the description (a featured image counts too).
+ * Placeholders (FRP_WATCH_PLACEHOLDER_IMAGES) don't count, and neither does an image on another site,
+ * which can stop loading: Facebook's image links expire after a few days.
+ * @return string|null null when the event has a graphic
+ */
+function frp_watch_graphic($event) {
+    // Block attributes can store URLs with escaped slashes.
+    $text = str_replace('\/', '/', $event['content']);
+    preg_match_all('/<img\b[^>]*?\ssrc=(["\'])(.*?)\1/is', $text, $m);
+    $srcs = $m[2];
+    preg_match_all('/\[av_image\b[^\]]*?\ssrc=(["\'])(.*?)\1/i', $text, $m);
+    $srcs = array_merge($srcs, $m[2]);
+    preg_match_all('/\[av_image\b[^\]]*?\sattachment=(["\'])(\d+)\1/i', $text, $m);
+    $ids = array_merge($m[2], $event['thumb'] ? [$event['thumb']] : []);
+    foreach ($ids as $id) {
+        $srcs[] = (string) wp_get_attachment_url((int) $id);
+    }
+
+    $site = preg_quote(preg_replace('/^www\./i', '', (string) wp_parse_url(home_url(), PHP_URL_HOST)), '/');
+    $placeholders = [];
+    $offsite = [];
+    foreach ($srcs as $src) {
+        $src = trim(html_entity_decode($src, ENT_QUOTES, 'UTF-8'));
+        if ($src === '') {
+            continue;
+        }
+        foreach (FRP_WATCH_PLACEHOLDER_IMAGES as $p) {
+            if (stripos($src, $p) !== false) {
+                $placeholders[] = basename((string) wp_parse_url($src, PHP_URL_PATH));
+                continue 2;
+            }
+        }
+        // Jetpack serves the site's own images from i0.wp.com and the like.
+        $host = (string) wp_parse_url($src, PHP_URL_HOST);
+        if ($host !== '' && !preg_match("/(^|\.)$site$|^i\d\.wp\.com$/i", $host)) {
+            $offsite[] = $host;
+            continue;
+        }
+        return null;
+    }
+    if ($offsite) {
+        return 'Graphic is linked from ' . $offsite[0] . ' and may stop loading; upload it to the Media Library';
+    }
+    return $placeholders ? 'Only a placeholder image (' . implode(', ', array_unique($placeholders)) . ')' : 'No graphic';
 }
 
 /** @return array [[post ID => path], errors] for FRP_WATCH_PAGES */
@@ -418,9 +470,9 @@ function frp_watch_soon_from($now) {
  * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
  * @return array ['subject', 'summary', 'sections', 'quiet', 'complete']. quiet is true when there is
  *               nothing to report; complete is false when events could not be read.
- *                    Each section: ['key' => soon|stale|errors, 'title', 'items']; event items are
- *                    ['title', 'url', 'when', 'in_progress', 'pages' => [place label => ['url', 'how']]], error items
- *                    are strings.
+ *                    Each section: ['key' => soon|stale|graphics|errors, 'title', 'items']; event items are
+ *                    ['title', 'url', 'when', 'in_progress', 'pages' => [place label => ['url', 'how']]], plus
+ *                    'issue' in graphics (what's wrong with the graphic); error items are strings.
  */
 function frp_watch_report($now, $soon_from) {
     $events = frp_watch_events($now);
@@ -488,18 +540,44 @@ function frp_watch_report($now, $soon_from) {
     }
     $n_stale = count($items);
 
-    $quiet = !$n_soon && !$n_stale;
+    // Every event that hasn't ended needs its graphic. The dates of a recurring event share one
+    // description, so it's listed once, at its next date.
+    $upcoming = array_filter($fetched, function ($e) use ($now) { return $e['end'] >= $now; });
+    uasort($upcoming, function ($a, $b) { return $a['start'] <=> $b['start']; });
+    $items = [];
+    $seen = [];
+    foreach ($upcoming as $key => $e) {
+        $series = explode('/', $key)[0];
+        if (isset($seen[$series])) {
+            continue;
+        }
+        $seen[$series] = true;
+        if ($issue = frp_watch_graphic($e)) {
+            $started = $e['start'] < $now;
+            $items[] = ['title' => $e['title'], 'url' => $e['url'], 'in_progress' => $started, 'pages' => [],
+                        'when' => ($started ? 'started ' : 'starts ') . wp_date('D M j', $e['start']), 'issue' => $issue];
+        }
+    }
+    if ($items) {
+        $sections[] = ['key' => 'graphics', 'title' => 'Missing a graphic', 'items' => $items];
+    }
+    $n_graphics = count($items);
+
+    $quiet = !$n_soon && !$n_stale && !$n_graphics;
     if ($errors) {
         $sections[] = ['key' => 'errors', 'title' => 'Pages that could not be checked', 'items' => $errors];
     }
     if ($quiet) {
         return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
                 'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
-                           . ' hours, and no past events are on the tracked pages.',
+                           . ' hours, no past events are on the tracked pages, and every upcoming event has a graphic.',
                 'sections' => $sections];
     }
-    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
-            'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on tracked pages',
+    return ['subject' => "FRP events: $n_soon soon, $n_stale past still live"
+                       . ($n_graphics ? ", $n_graphics missing " . ($n_graphics === 1 ? 'a graphic' : 'graphics') : ''),
+            'quiet' => false,
+            'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on tracked pages'
+                       . ($n_graphics ? " · $n_graphics missing " . ($n_graphics === 1 ? 'a graphic' : 'graphics') : ''),
             'sections' => $sections, 'complete' => true];
 }
 
@@ -514,6 +592,10 @@ function frp_watch_render_text($report) {
             }
             $lines[] = "- {$item['title']} ({$item['when']})";
             $lines[] = "  {$item['url']}";
+            if (isset($item['issue'])) {
+                $lines[] = "  {$item['issue']}";
+                continue;
+            }
             if (!$item['pages']) {
                 $lines[] = '  On: not found on tracked pages';
             }
@@ -528,7 +610,7 @@ function frp_watch_render_text($report) {
 
 /** Email-safe HTML: tables and inline styles only. */
 function frp_watch_render_html($report, $footer_url) {
-    $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'errors' => '#6b7280'];
+    $accent = ['soon' => '#2563eb', 'stale' => '#d97706', 'graphics' => '#7c3aed', 'errors' => '#6b7280'];
     $font = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
     $h = function ($s) { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); };
 
@@ -560,7 +642,9 @@ function frp_watch_render_html($report, $footer_url) {
             $body .= "<div style=\"border-left:4px solid $c;background:#f9fafb;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:10px;\">"
                    . '<a href="' . $h($item['url']) . '" style="font-size:15px;font-weight:600;color:#111827;text-decoration:none;">' . $h($item['title']) . '</a>' . $tag
                    . '<div style="font-size:13px;color:#374151;margin-top:3px;font-weight:600;">' . $h(ucfirst($item['when'])) . '</div>'
-                   . '<div style="font-size:13px;color:#374151;margin-top:6px;">On: ' . $chips . '</div>'
+                   . (isset($item['issue'])
+                       ? '<div style="font-size:13px;color:#374151;margin-top:6px;">' . $h($item['issue']) . '</div>'
+                       : '<div style="font-size:13px;color:#374151;margin-top:6px;">On: ' . $chips . '</div>')
                    . '</div>';
         }
         $body .= '</td></tr>';
@@ -580,12 +664,33 @@ function frp_watch_render_html($report, $footer_url) {
          . '</table></td></tr></table></body></html>';
 }
 
-function frp_watch_recipient() {
-    return get_option('frp_watch_mail_to') ?: get_option('admin_email');
+/**
+ * Addresses separated by commas, semicolons, spaces or new lines; repeats are dropped.
+ * @return array [valid addresses, entries that aren't addresses]
+ */
+function frp_watch_parse_emails($raw) {
+    $valid = [];
+    $invalid = [];
+    foreach (preg_split('/[\s,;]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY) as $entry) {
+        $email = sanitize_email($entry);
+        if ($email !== '' && is_email($email)) {
+            $valid[strtolower($email)] = $valid[strtolower($email)] ?? $email;
+        } else {
+            $invalid[] = $entry;
+        }
+    }
+    return [array_values($valid), $invalid];
+}
+
+/** @return array the saved recipients, or the site admin email when none are saved */
+function frp_watch_recipients() {
+    return frp_watch_parse_emails(get_option('frp_watch_mail_to'))[0] ?: [get_option('admin_email')];
 }
 
 /**
- * Sends $text, plus $html as the main part when given.
+ * Sends $text, plus $html as the main part when given, as one email to every address in $to (each
+ * recipient sees the others).
+ * @param array $to addresses
  * @return true|string true on success, otherwise an error message
  */
 function frp_watch_mail($to, $subject, $text, $html = null) {
@@ -603,7 +708,7 @@ function frp_watch_mail($to, $subject, $text, $html = null) {
         return $ok ?: 'wp_mail failed';
     }
     $payload = ['from' => get_option('frp_watch_mail_from') ?: 'onboarding@resend.dev',
-                'to' => [$to], 'subject' => $subject, 'text' => $text];
+                'to' => array_values($to), 'subject' => $subject, 'text' => $text];
     if ($html) {
         $payload['html'] = $html;
     }
@@ -642,10 +747,11 @@ function frp_watch_run($send) {
     } elseif ($skip) {
         $status = 'Nothing to report; quiet-day emails are off, so nothing was sent.';
     } else {
-        $to = frp_watch_recipient();
+        $to = frp_watch_recipients();
         $ok = frp_watch_mail($to, $report['subject'], $text, $html);
         $done = $ok === true && $report['complete'];
-        $status = $ok === true ? "Sent to $to." : "Failed sending to $to: $ok";
+        $list = implode(', ', $to);
+        $status = $ok === true ? "Sent to $list." : "Failed sending to $list: $ok";
     }
     if ($send && $done) {
         update_option('frp_watch_soon_until', $now + FRP_WATCH_SOON_HOURS * HOUR_IN_SECONDS, false);
@@ -661,10 +767,10 @@ add_action('admin_post_frp_watch', function () {
     check_admin_referer('frp_watch');
     $notice = '';
     if (isset($_POST['frp_watch_save'])) {
-        $to = sanitize_email(wp_unslash($_POST['frp_watch_mail_to'] ?? ''));
+        [$to, $invalid] = frp_watch_parse_emails(wp_unslash($_POST['frp_watch_mail_to'] ?? ''));
         $from = sanitize_text_field(wp_unslash($_POST['frp_watch_mail_from'] ?? ''));
         $key = sanitize_text_field(wp_unslash($_POST['frp_watch_resend_key'] ?? ''));
-        update_option('frp_watch_mail_to', $to, false);
+        update_option('frp_watch_mail_to', implode(', ', $to), false);
         update_option('frp_watch_mail_from', $from, false);
         update_option('frp_watch_quiet_email', empty($_POST['frp_watch_quiet_email']) ? '0' : '1', false);
         // Blank keeps the saved key; the remove box clears it.
@@ -673,11 +779,13 @@ add_action('admin_post_frp_watch', function () {
         } elseif ($key) {
             update_option('frp_watch_resend_key', $key, false);
         }
-        $notice = 'Saved. Reports will go to ' . frp_watch_recipient() . '.';
+        $notice = 'Saved. Reports will go to ' . implode(', ', frp_watch_recipients()) . '.'
+                . ($invalid ? ' Not email addresses, so left out: ' . implode(', ', $invalid) . '.' : '');
     } elseif (isset($_POST['frp_watch_test'])) {
-        $to = frp_watch_recipient();
+        $to = frp_watch_recipients();
+        $list = implode(', ', $to);
         $ok = frp_watch_mail($to, 'FRP events watch: test', 'Test email from the FRP Events Watch plugin. Delivery works.');
-        $notice = $ok === true ? "Test email sent to $to. Check spam if it doesn't arrive." : "Failed sending to $to: $ok";
+        $notice = $ok === true ? "Test email sent to $list. Check spam if it doesn't arrive." : "Failed sending to $list: $ok";
     } elseif (isset($_POST['frp_watch_send'])) {
         $notice = 'Report: ' . frp_watch_run(true)['status'];
     }
@@ -705,8 +813,8 @@ add_action('admin_menu', function () {
                 <input type="hidden" name="action" value="frp_watch">
                 <?php wp_nonce_field('frp_watch'); ?>
                 <p>
-                    <label for="frp_watch_mail_to">Send reports to</label><br>
-                    <input type="email" class="regular-text" id="frp_watch_mail_to" name="frp_watch_mail_to"
+                    <label for="frp_watch_mail_to">Send reports to (separate addresses with commas; everyone sees the full list)</label><br>
+                    <input type="email" multiple class="regular-text" id="frp_watch_mail_to" name="frp_watch_mail_to"
                            value="<?php echo esc_attr(get_option('frp_watch_mail_to', '')); ?>"
                            placeholder="<?php echo esc_attr(get_option('admin_email')); ?>">
                 </p>
