@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.6.0
+ * Version: 1.6.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -248,7 +248,9 @@ function frp_watch_find($titles, $pages) {
             $text = str_replace('\/', '/', $text);
             $here = [];
             foreach (frp_watch_refs($text) as [$key, $at]) {
-                $here[$key][] = frp_watch_element($text, $at, 'link');
+                if (!frp_watch_unused($text, $at)) {
+                    $here[$key][] = frp_watch_element($text, $at, 'link');
+                }
             }
             // Titles are searched with HTML tags turned into spaces, so "<strong>Retreat</strong> 2026"
             // reads "retreat 2026". Shortcodes survive, so the element around a title can still be named.
@@ -256,7 +258,9 @@ function frp_watch_find($titles, $pages) {
             foreach ($titles as $key => $re) {
                 if (preg_match_all($re, $norm, $m, PREG_OFFSET_CAPTURE)) {
                     foreach ($m[0] as [, $at]) {
-                        $here[$key][] = frp_watch_element($norm, $at, 'title');
+                        if (!frp_watch_unused($norm, $at)) {
+                            $here[$key][] = frp_watch_element($norm, $at, 'title');
+                        }
                     }
                 }
             }
@@ -269,6 +273,37 @@ function frp_watch_find($titles, $pages) {
         }
     }
     return $hits;
+}
+
+/**
+ * Whether a match at $at sits in the settings of an Avia element where the page shows nothing:
+ * - in a *_dynamic setting whose plain setting is empty (link_dynamic without link), a leftover
+ *   Avia keeps after the dynamic option is switched off;
+ * - anywhere in an image element with no image (src, attachment and src_dynamic all empty).
+ */
+function frp_watch_unused($text, $at) {
+    $open = strrpos(substr($text, 0, $at), '[');
+    if ($open === false || !preg_match('/\G\[(av_[a-z0-9_]+)([^\]]*)\]/i', $text, $m, PREG_OFFSET_CAPTURE, $open)
+        || $open + strlen($m[0][0]) <= $at) {
+        return false;
+    }
+    $attrs = [];
+    $in = null;
+    preg_match_all('/([\w-]+)=(?:\'([^\']*)\'|"([^"]*)")/', $m[2][0], $found, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+    foreach ($found as $attr) {
+        $name = strtolower($attr[1][0]);
+        $value = $attr[2][1] >= 0 ? $attr[2] : $attr[3];
+        $attrs[$name] = $value[0];
+        $start = $m[2][1] + $value[1];
+        if ($at >= $start && $at < $start + strlen($value[0])) {
+            $in = $name;
+        }
+    }
+    if ($in !== null && substr($in, -8) === '_dynamic' && ($attrs[substr($in, 0, -8)] ?? '') === '') {
+        return true;
+    }
+    return strtolower($m[1][0]) === 'av_image' && isset($attrs['src']) && $attrs['src'] === ''
+        && ($attrs['attachment'] ?? '') === '' && ($attrs['src_dynamic'] ?? '') === '';
 }
 
 /**

@@ -25,7 +25,7 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it reads saved content (including Avia shortcodes), menus and widgets, not Avia's separate stored builder copy. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). A past event mentioned by title only, with no link, is caught only for 30 days after it ends. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
+Limitation: it reads saved content (including Avia shortcodes), menus and widgets, not Avia's separate stored builder copy. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). A past event mentioned by title only, with no link, is caught only for 30 days after it ends. Leftovers in Avia element settings that the page never shows are ignored: an empty image element (no image source) and a `*_dynamic` setting such as `link_dynamic` whose plain setting (`link`) is empty. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
 
 ## Install
 
@@ -77,6 +77,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.6.1:** ignores Avia leftovers the page never shows: matches inside an image element with no image, and in `link_dynamic` (or any `*_dynamic` setting) when `link` is empty. These were reported as "Image link" on pages with nothing visible to remove.
 - **1.6.0:** unit tests (PHPUnit + Brain Monkey) run in CI on PHP 7.4 and 8.3 before the zip is built; the build workflow uses Node 24 actions and uploads the plugin zip directly. No change to what the plugin reports.
 - **1.5.1:** no longer reads Avia's stored builder copy (`_aviaLayoutBuilderCleanData`), which can keep links the page no longer shows. Pages are read from their saved content only.
 - **1.5.0:** scans only the pages in `FRP_WATCH_PAGES` again (plus menus and widgets), instead of every post and page; pages that can't be found are listed in the email. Link detection from 1.4.0 is unchanged.

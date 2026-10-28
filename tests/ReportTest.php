@@ -42,6 +42,18 @@ class ReportTest extends FrpTestCase {
         $this->assertSame(['Button link', 'Image link'], $stale[0]['pages']['/lcw/']['how']);
     }
 
+    /** Regression: /families/ had an empty image whose only link was a leftover link_dynamic. */
+    public function test_families_empty_image_is_not_reported() {
+        $this->addPage($this->page('/families/'), 'families', file_get_contents(__DIR__ . '/fixtures-families.txt'));
+        $this->assertTrue($this->report()['quiet']);
+    }
+
+    public function test_title_in_an_empty_image_is_not_reported() {
+        $this->fetched = [$this->event(310, 'Fall Picnic', '/event/fall-picnic/', -48, -46)];
+        $this->addPage(1, 'home', "[av_image src='' attachment='' caption='Fall Picnic'][/av_image]");
+        $this->assertTrue($this->report()['quiet']);
+    }
+
     public function test_untracked_pages_are_not_scanned() {
         $this->pages[500] = (object) ['ID' => 500, 'post_type' => 'post', 'post_name' => 'blog',
                                       'post_content' => '<a href="/event/old-draft/">x</a>'];
