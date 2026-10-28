@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned anywhere on the site. Read-only; never edits content.
- * Version: 1.4.0
+ * Version: 1.4.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -15,7 +15,8 @@ defined('ABSPATH') || exit;
 
 const FRP_WATCH_HOOK = 'frp_events_watch_daily';
 const FRP_WATCH_SOON_HOURS = 24;
-const FRP_WATCH_PAST_LOOKBACK_DAYS = 14;
+// How long after it ends a past event is still searched for by title. Links count at any age.
+const FRP_WATCH_PAST_LOOKBACK_DAYS = 30;
 
 // Daily at 12:00 UTC. WP-Cron fires on the first site visit after that time.
 add_action('init', function () {
