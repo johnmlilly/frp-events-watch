@@ -130,14 +130,6 @@ function frp_watch_pages() {
 function frp_watch_places($pages) {
     foreach ($pages as $id => $path) {
         $sources = ['content' => get_post($id)->post_content];
-        // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
-        // to the default editor, so only read it while the Avia builder is active on the page.
-        if (get_post_meta($id, '_aviaLayoutBuilder_active', true) === 'active') {
-            $v = get_post_meta($id, '_aviaLayoutBuilderCleanData', true);
-            if (is_string($v) && $v !== '') {
-                $sources['Avia builder data'] = $v;
-            }
-        }
         yield ['label' => $path, 'url' => home_url($path), 'sources' => $sources];
     }
 
@@ -251,14 +243,12 @@ function frp_watch_find($titles, $pages) {
     $hits = [];
     foreach (frp_watch_places($pages) as $place) {
         $found = [];
-        foreach ($place['sources'] as $source => $text) {
-            // Say when a hit comes from the builder's stored copy, which can hold links the page no longer shows.
-            $from = $source === 'Avia builder data' ? " [$source]" : '';
+        foreach ($place['sources'] as $text) {
             // Block attributes can store URLs with escaped slashes.
             $text = str_replace('\/', '/', $text);
             $here = [];
             foreach (frp_watch_refs($text) as [$key, $at]) {
-                $here[$key][] = frp_watch_element($text, $at, 'link') . $from;
+                $here[$key][] = frp_watch_element($text, $at, 'link');
             }
             // Titles are searched with HTML tags turned into spaces, so "<strong>Retreat</strong> 2026"
             // reads "retreat 2026". Shortcodes survive, so the element around a title can still be named.
@@ -266,7 +256,7 @@ function frp_watch_find($titles, $pages) {
             foreach ($titles as $key => $re) {
                 if (preg_match_all($re, $norm, $m, PREG_OFFSET_CAPTURE)) {
                     foreach ($m[0] as [, $at]) {
-                        $here[$key][] = frp_watch_element($norm, $at, 'title') . $from;
+                        $here[$key][] = frp_watch_element($norm, $at, 'title');
                     }
                 }
             }
