@@ -34,16 +34,12 @@ class ReportTest extends FrpTestCase {
     /** Regression: /lcw/ linked an event that ended months before, through Avia's ID link. */
     public function test_lcw_link_to_an_event_that_ended_months_ago_is_reported() {
         $id = $this->page('/lcw/');
-        $this->addPage($id, 'lcw', "[av_image link='tribe_events,100']",
-                       "[av_image src='x.jpg' link='tribe_events,100'][av_button link='manually,https://www.familyrenewalproject.com/event/lcw-marian-paint-by-number/']");
+        $this->addPage($id, 'lcw', "[av_image src='x.jpg' link='tribe_events,100'][av_button link='manually,https://www.familyrenewalproject.com/event/lcw-marian-paint-by-number/']");
 
         $stale = $this->section($this->report(), 'stale');
         $this->assertCount(1, $stale);
         $this->assertSame('LCW: Marian Paint by Number', $stale[0]['title']);
-        $avia = $this->meta[$id]['_aviaLayoutBuilderCleanData'];
-        $this->assertSame(['Image link', 'Button link'], $stale[0]['pages']['/lcw/']['how'],
-                          'DEBUG ' . json_encode(['refs' => frp_watch_refs($avia), 'meta' => get_post_meta($id, '_aviaLayoutBuilder_active', true),
-                                                  'places' => iterator_to_array(frp_watch_places([$id => '/lcw/']))]));
+        $this->assertSame(['Button link', 'Image link'], $stale[0]['pages']['/lcw/']['how']);
     }
 
     public function test_untracked_pages_are_not_scanned() {
@@ -64,10 +60,10 @@ class ReportTest extends FrpTestCase {
         $this->assertSame('/', array_keys($this->section($this->report(), 'stale')[0]['pages'])[0]);
     }
 
-    public function test_avia_data_is_ignored_when_the_builder_is_off() {
+    /** Avia's stored builder copy can keep links the page no longer shows (1.5.1). */
+    public function test_avia_stored_builder_copy_is_never_read() {
         $id = $this->page('/lcw/');
-        $this->addPage($id, 'lcw', '');
-        $this->meta[$id] = ['_aviaLayoutBuilder_active' => '', '_aviaLayoutBuilderCleanData' => "[av_image link='tribe_events,100']"];
+        $this->addPage($id, 'lcw', '', "[av_image link='tribe_events,100']");
         $this->assertTrue($this->report()['quiet']);
     }
 
