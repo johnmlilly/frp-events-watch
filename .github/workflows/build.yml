@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -40,15 +40,16 @@ jobs:
           cp wordpress/frp-events-watch.php dist/frp-events-watch/
           cd dist && zip -r "frp-events-watch-${{ steps.v.outputs.version }}.zip" frp-events-watch
 
-      - uses: actions/upload-artifact@v4
+      # archive: false uploads the plugin zip as is, so the download is the zip WordPress takes.
+      - uses: actions/upload-artifact@v7
         with:
-          name: frp-events-watch-${{ steps.v.outputs.version }}
-          path: dist/frp-events-watch/
+          path: dist/frp-events-watch-${{ steps.v.outputs.version }}.zip
+          archive: false
           retention-days: 30
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*.zip
           generate_release_notes: true

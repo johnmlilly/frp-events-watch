@@ -34,7 +34,7 @@ Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is ac
 
 ## Release
 
-The Build workflow lints the plugin and builds the zip on every push and pull request (download it from the run's artifacts). To publish a release:
+The Build workflow lints the plugin and builds the zip on every push and pull request (download it from the run's artifacts; it's the plugin zip itself, ready to upload). To publish a release:
 
 1. Bump `Version:` in the plugin header and merge to `main`.
 2. Tag it: `git tag v1.4.1 && git push origin v1.4.1`. The tag must match `Version:` or the build fails.
