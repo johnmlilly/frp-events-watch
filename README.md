@@ -29,12 +29,23 @@ Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is ac
 
 ## Install
 
-1. Zip the plugin folder:
-   ```
-   mkdir -p dist/frp-events-watch && cp wordpress/frp-events-watch.php dist/frp-events-watch/
-   (cd dist && zip -r frp-events-watch.zip frp-events-watch)
-   ```
+1. Download `frp-events-watch-<version>.zip` from the latest [release](https://github.com/johnmlilly/frp-events-watch/releases).
 2. In WP admin: **Plugins → Add New → Upload Plugin**, upload the zip, and activate it. To update later, upload again and choose **Replace current with uploaded**.
+
+## Release
+
+The Build workflow lints the plugin and builds the zip on every push and pull request (download it from the run's artifacts). To publish a release:
+
+1. Bump `Version:` in the plugin header and merge to `main`.
+2. Tag it: `git tag v1.4.1 && git push origin v1.4.1`. The tag must match `Version:` or the build fails.
+3. The workflow creates a GitHub release with the zip attached.
+
+To build locally instead:
+
+```
+mkdir -p dist/frp-events-watch && cp wordpress/frp-events-watch.php dist/frp-events-watch/
+(cd dist && zip -r frp-events-watch.zip frp-events-watch)
+```
 
 ## Settings (Tools → FRP Events Watch)
 
