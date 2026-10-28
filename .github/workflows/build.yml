@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+
+      - name: Lint
+        run: php -l wordpress/frp-events-watch.php
+
+      - name: Read plugin version
+        id: v
+        run: echo "version=$(grep -Po '^\s*\*\s*Version:\s*\K\S+' wordpress/frp-events-watch.php)" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag matches plugin version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [ "${GITHUB_REF_NAME#v}" != "${{ steps.v.outputs.version }}" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match plugin Version: ${{ steps.v.outputs.version }}"
+            exit 1
+          fi
+
+      # The zip holds a frp-events-watch/ folder, so WordPress replaces the installed plugin.
+      - name: Build zip
+        run: |
+          mkdir -p dist/frp-events-watch
+          cp wordpress/frp-events-watch.php dist/frp-events-watch/
+          cd dist && zip -r "frp-events-watch-${{ steps.v.outputs.version }}.zip" frp-events-watch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frp-events-watch-${{ steps.v.outputs.version }}
+          path: dist/frp-events-watch/
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
