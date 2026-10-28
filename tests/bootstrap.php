@@ -1,9 +1,11 @@
 <?php
 /**
- * Loads the plugin without WordPress. Brain Monkey (loaded by Composer) defines the hook
- * functions; everything else WordPress provides is stubbed per test in FrpTestCase.
+ * Loads the plugin without WordPress. Brain Monkey defines the hook functions and a few helpers
+ * (untrailingslashit, is_wp_error); everything else WordPress provides is stubbed per test in
+ * FrpTestCase.
  */
 require dirname(__DIR__) . '/vendor/autoload.php';
+Brain\Monkey\setUp();
 
 define('ABSPATH', __DIR__ . '/');
 define('MINUTE_IN_SECONDS', 60);
@@ -25,9 +27,6 @@ function register_deactivation_hook($file, $callback) {
 }
 
 // Small pure helpers, same behavior as WordPress's.
-function untrailingslashit($s) {
-    return rtrim($s, '/\\');
-}
 function wp_parse_url($url, $component = -1) {
     return parse_url($url, $component);
 }

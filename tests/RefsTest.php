@@ -65,7 +65,7 @@ class RefsTest extends FrpTestCase {
         $text = 'a <a href="/event/one/">1</a> b <a href="/event/two/">2</a>';
         $refs = frp_watch_refs($text);
         $this->assertSame(['one', 'two'], array_column($refs, 0));
-        $this->assertSame('/event/one/', substr($text, $refs[0][1] + 1, 11));
+        $this->assertSame('/event/one/', substr($text, $refs[0][1], 11));
     }
 
     public function test_event_key_matches_the_key_of_a_link_to_it() {

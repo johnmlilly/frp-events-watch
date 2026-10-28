@@ -32,9 +32,20 @@ Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is ac
 1. Download `frp-events-watch-<version>.zip` from the latest [release](https://github.com/johnmlilly/frp-events-watch/releases).
 2. In WP admin: **Plugins → Add New → Upload Plugin**, upload the zip, and activate it. To update later, upload again and choose **Replace current with uploaded**.
 
+## Development
+
+Unit tests use PHPUnit and [Brain Monkey](https://github.com/Brain-WP/BrainMonkey), which stubs WordPress functions, so no WordPress install is needed:
+
+```
+composer install
+composer test
+```
+
+Tests live in `tests/`. `FrpTestCase` stubs WordPress and The Events Calendar for a site at `https://www.familyrenewalproject.com` in UTC; its `EVENTS` list holds the event posts the tests link to. The Build workflow runs the tests on PHP 7.4 and 8.3 before building the zip. The zip contains only the plugin file.
+
 ## Release
 
-The Build workflow lints the plugin and builds the zip on every push and pull request (download it from the run's artifacts; it's the plugin zip itself, ready to upload). To publish a release:
+The Build workflow lints and tests the plugin and builds the zip on every push and pull request (download it from the run's artifacts; it's the plugin zip itself, ready to upload). To publish a release:
 
 1. Bump `Version:` in the plugin header and merge to `main`.
 2. Tag it: `git tag v1.4.1 && git push origin v1.4.1`. The tag must match `Version:` or the build fails.
