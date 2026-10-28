@@ -40,7 +40,10 @@ class ReportTest extends FrpTestCase {
         $stale = $this->section($this->report(), 'stale');
         $this->assertCount(1, $stale);
         $this->assertSame('LCW: Marian Paint by Number', $stale[0]['title']);
-        $this->assertSame(['Image link', 'Button link'], $stale[0]['pages']['/lcw/']['how']);
+        $avia = $this->meta[$id]['_aviaLayoutBuilderCleanData'];
+        $this->assertSame(['Image link', 'Button link'], $stale[0]['pages']['/lcw/']['how'],
+                          'DEBUG ' . json_encode(['refs' => frp_watch_refs($avia), 'meta' => get_post_meta($id, '_aviaLayoutBuilder_active', true),
+                                                  'places' => iterator_to_array(frp_watch_places([$id => '/lcw/']))]));
     }
 
     public function test_untracked_pages_are_not_scanned() {
