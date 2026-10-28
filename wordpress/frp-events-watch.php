@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: FRP Events Watch
- * Description: Daily email listing events that start soon and past events still mentioned anywhere on the site. Read-only; never edits content.
- * Version: 1.4.1
+ * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
+ * Version: 1.5.0
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -17,6 +17,9 @@ const FRP_WATCH_HOOK = 'frp_events_watch_daily';
 const FRP_WATCH_SOON_HOURS = 24;
 // How long after it ends a past event is still searched for by title. Links count at any age.
 const FRP_WATCH_PAST_LOOKBACK_DAYS = 30;
+// Pages that carry time-sensitive event info. Edit freely.
+const FRP_WATCH_PAGES = ['/', '/community/', '/families/', '/lcm/', '/lcw/', '/lgw/',
+                         '/thewayoftrust/', '/prayer/', '/courses/', '/gsc/'];
 
 // Daily at 12:00 UTC. WP-Cron fires on the first site visit after that time.
 add_action('init', function () {
@@ -93,43 +96,49 @@ function frp_watch_events($now) {
     return $events;
 }
 
+/** @return array [[post ID => path], errors] for FRP_WATCH_PAGES */
+function frp_watch_pages() {
+    $pages = [];
+    $errors = [];
+    foreach (FRP_WATCH_PAGES as $path) {
+        if ($path === '/') {
+            $id = get_option('show_on_front') === 'page' ? (int) get_option('page_on_front') : 0;
+            // Enfold can set the front page in its own theme options instead.
+            if (!$id && function_exists('avia_get_option')) {
+                $id = (int) avia_get_option('frontpage');
+            }
+        } else {
+            $id = url_to_postid(home_url($path));
+        }
+        if (!$id || !get_post($id)) {
+            $errors[] = "$path: not a page or post";
+            continue;
+        }
+        $pages[$id] = $path;
+    }
+    return [$pages, $errors];
+}
+
 /**
- * Everywhere an event can be mentioned: published posts, pages and synced patterns of every public
- * type except The Events Calendar's own, the nav menus, and the active widgets of each sidebar.
- * Posts are read from the database, not rendered, so other meta (SEO descriptions, caches) and
- * content built at render time (post sliders, event lists) are not scanned.
+ * Everywhere an event can be mentioned: the tracked pages, the nav menus, and the active widgets
+ * of each sidebar (menus and widgets show on the tracked pages too). Pages are read from the
+ * database, not rendered, so other meta (SEO descriptions, caches) and content built at render
+ * time (post sliders, event lists) are not scanned.
+ * @param array $pages post ID => path, from frp_watch_pages()
  * @return Generator of ['label', 'url', 'sources' => [source name => text]]
  */
-function frp_watch_places() {
-    $types = array_values(array_filter(array_merge(get_post_types(['public' => true]), ['wp_block']), function ($t) {
-        return $t !== 'attachment' && strpos($t, 'tribe_') !== 0;
-    }));
-    for ($paged = 1; ; $paged++) {
-        $q = new WP_Query(['post_type' => $types, 'post_status' => 'publish', 'posts_per_page' => 200,
-                           'paged' => $paged, 'orderby' => 'ID', 'order' => 'ASC', 'no_found_rows' => true,
-                           'update_post_term_cache' => false, 'suppress_filters' => true]);
-        foreach ($q->posts as $p) {
-            $sources = ['content' => $p->post_content];
-            // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
-            // to the default editor, so only read it while the Avia builder is active on the page.
-            if (get_post_meta($p->ID, '_aviaLayoutBuilder_active', true) === 'active') {
-                $v = get_post_meta($p->ID, '_aviaLayoutBuilderCleanData', true);
-                if (is_string($v) && $v !== '') {
-                    $sources['Avia builder data'] = $v;
-                }
+function frp_watch_places($pages) {
+    foreach ($pages as $id => $path) {
+        $sources = ['content' => get_post($id)->post_content];
+        // Avia (Enfold) keeps its layout in meta but leaves it behind when a page is switched back
+        // to the default editor, so only read it while the Avia builder is active on the page.
+        if (get_post_meta($id, '_aviaLayoutBuilder_active', true) === 'active') {
+            $v = get_post_meta($id, '_aviaLayoutBuilderCleanData', true);
+            if (is_string($v) && $v !== '') {
+                $sources['Avia builder data'] = $v;
             }
-            if ($p->post_type === 'wp_block') {
-                $label = 'Synced pattern "' . $p->post_title . '"';
-                $url = admin_url('post.php?post=' . $p->ID . '&action=edit');
-            } else {
-                $url = get_permalink($p);
-                $label = wp_make_link_relative($url) ?: '/';
-            }
-            yield ['label' => $label, 'url' => $url, 'sources' => $sources];
         }
-        if (count($q->posts) < 200) {
-            break;
-        }
+        yield ['label' => $path, 'url' => home_url($path), 'sources' => $sources];
     }
 
     foreach (wp_get_nav_menus() as $menu) {
@@ -232,14 +241,15 @@ function frp_watch_event_key($event) {
 }
 
 /**
- * Where each event is mentioned anywhere on the site. Links to any event are collected (see
+ * Where each event is mentioned on the tracked pages, menus and widgets. Links to any event are collected (see
  * frp_watch_refs); titles only for the events in $titles.
+ * @param array $pages post ID => path, from frp_watch_pages()
  * @param array $titles event key => title regex
  * @return array event key => [place label => ['url', 'how' => where on the page]]
  */
-function frp_watch_find($titles) {
+function frp_watch_find($titles, $pages) {
     $hits = [];
-    foreach (frp_watch_places() as $place) {
+    foreach (frp_watch_places($pages) as $place) {
         $found = [];
         foreach ($place['sources'] as $text) {
             // Block attributes can store URLs with escaped slashes.
@@ -416,7 +426,8 @@ function frp_watch_report($now, $soon_from) {
             $titles[$key] = $re;
         }
     }
-    $hits = frp_watch_find($titles);
+    [$pages, $errors] = frp_watch_pages();
+    $hits = frp_watch_find($titles, $pages);
 
     $sections = [];
     $items = [];
@@ -450,14 +461,18 @@ function frp_watch_report($now, $soon_from) {
     }
     $n_stale = count($items);
 
-    if (!$n_soon && !$n_stale) {
+    $quiet = !$n_soon && !$n_stale;
+    if ($errors) {
+        $sections[] = ['key' => 'errors', 'title' => 'Pages that could not be checked', 'items' => $errors];
+    }
+    if ($quiet) {
         return ['subject' => 'FRP events: nothing to report', 'quiet' => true, 'complete' => true,
                 'summary' => 'Nothing to report. No events start in the next ' . FRP_WATCH_SOON_HOURS
-                           . ' hours, and no past events are mentioned on the site.',
+                           . ' hours, and no past events are on the tracked pages.',
                 'sections' => $sections];
     }
     return ['subject' => "FRP events: $n_soon soon, $n_stale past still live", 'quiet' => false,
-            'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on the site',
+            'summary' => "$n_soon starting soon · $n_stale past " . ($n_stale === 1 ? 'event' : 'events') . ' still on tracked pages',
             'sections' => $sections, 'complete' => true];
 }
 
@@ -473,7 +488,7 @@ function frp_watch_render_text($report) {
             $lines[] = "- {$item['title']} ({$item['when']})";
             $lines[] = "  {$item['url']}";
             if (!$item['pages']) {
-                $lines[] = '  On: not found on the site';
+                $lines[] = '  On: not found on tracked pages';
             }
             foreach ($item['pages'] as $path => $page) {
                 $lines[] = "  On: $path (" . implode(', ', $page['how']) . ')';
@@ -513,7 +528,7 @@ function frp_watch_render_html($report, $footer_url) {
                         . '<span style="font-size:12px;color:#6b7280;">' . $h(implode(' · ', $page['how'])) . '</span></div>';
             }
             if (!$chips) {
-                $chips = ' <span style="color:#9ca3af;">Not found on the site</span>';
+                $chips = ' <span style="color:#9ca3af;">Not on any tracked page</span>';
             }
             $body .= "<div style=\"border-left:4px solid $c;background:#f9fafb;border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:10px;\">"
                    . '<a href="' . $h($item['url']) . '" style="font-size:15px;font-weight:600;color:#111827;text-decoration:none;">' . $h($item['title']) . '</a>' . $tag

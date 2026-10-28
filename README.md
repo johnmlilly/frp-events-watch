@@ -8,7 +8,7 @@
 WordPress plugin that runs a daily check of the [Family Renewal Project](https://www.familyrenewalproject.com/events/) events calendar. It emails a report when:
 
 - an event **starts within 24 hours**, or
-- an event **has already ended** but is still mentioned anywhere on the site.
+- an event **has already ended** but is still mentioned on one of the tracked site pages.
 
 It only reports. It never edits WordPress. It runs inside the site, so Cloudflare bot protection doesn't get in the way.
 
@@ -19,13 +19,13 @@ Source: [`wordpress/frp-events-watch.php`](wordpress/frp-events-watch.php).
 | Step | What happens |
 |---|---|
 | 1. Get events | Reads events straight from The Events Calendar (no REST API calls). |
-| 2. Scan the site | Reads every published post, page and synced pattern from the database (content plus Avia builder data), every nav menu and every active widget, and finds every link to an event: full or relative URLs, plain permalinks, and Avia's internal links (which store the event's ID, not its URL). Each linked event is checked however long ago it ended, and a link to an unpublished or deleted event is reported too. Titles, as a whole phrase, are searched for events starting soon and events that ended in the last 30 days; a past event whose title an upcoming event shares (a recurring event) is matched by link only. |
+| 2. Scan pages | Reads each page in `FRP_WATCH_PAGES` from the database (content plus Avia builder data), plus every nav menu and active widget (they show on those pages too), and finds every link to an event: full or relative URLs, plain permalinks, and Avia's internal links (which store the event's ID, not its URL). Each linked event is checked however long ago it ended, and a link to an unpublished or deleted event is reported too. Titles, as a whole phrase, are searched for events starting soon and events that ended in the last 30 days; a past event whose title an upcoming event shares (a recurring event) is matched by link only. |
 | 3. Email | Emails a summary through Resend if an API key is set, otherwise through `wp_mail`. On days with nothing to report it sends a short all-clear, unless that's turned off in settings. |
 | Format | HTML email (event links, color-coded sections, page links) with a plain-text fallback. The Tools page previews both. |
 | Schedule | WP-Cron, daily at 12:00 UTC. Fires on the first site visit after that time. |
 | Soon window | Picks up where the last delivered report's 24h window ended, so a late WP-Cron run doesn't skip or repeat events. Events that started in the gap and are still running are listed as "started". Previews don't move the window; a failed send is retried next run. |
 
-Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is active on the page), menus and widgets. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). Links and titles count anywhere, so a blog post or recap linking or naming a past event shows up too. A past event mentioned by title only, with no link, is caught only for 30 days after it ends. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
+Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is active on the page), menus and widgets. It doesn't read theme options, SEO fields, or content built when a page renders (post sliders, event lists). A past event mentioned by title only, with no link, is caught only for 30 days after it ends. For each place, the email says where the event appears (for example "Image link", "Button link" or "Text block (title)"), which helps track down a stale mention.
 
 ## Install
 
@@ -47,14 +47,15 @@ Limitation: it reads saved content, Avia (Enfold) builder data (while Avia is ac
 
 ## Customize
 
-Edit the constants at the top of the plugin file: `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`.
+Edit the constants at the top of the plugin file: `FRP_WATCH_PAGES`, `FRP_WATCH_SOON_HOURS`, `FRP_WATCH_PAST_LOOKBACK_DAYS`.
 
 ## Reuse on another site
 
-Change the plugin name in the header comment. If you install both copies on one site, also rename `FRP_WATCH_HOOK`, the `frp_watch_` function prefix and option names so they don't collide. The site needs The Events Calendar.
+Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you install both copies on one site, also rename `FRP_WATCH_HOOK`, the `frp_watch_` function prefix and option names so they don't collide. The site needs The Events Calendar.
 
 ## Changelog
 
+- **1.5.0:** scans only the pages in `FRP_WATCH_PAGES` again (plus menus and widgets), instead of every post and page; pages that can't be found are listed in the email. Link detection from 1.4.0 is unchanged.
 - **1.4.1:** titles of past events are searched for 30 days after they end (was 14).
 - **1.4.0:** finds links to past events however long ago they ended (before, only events that ended in the last 14 days were checked), plus Avia internal links that store an event ID instead of a URL, and links to unpublished or deleted events; element names ignore buttons and images that come before a link but don't contain it.
 - **1.3.0:** scans the whole site (all published posts, pages and synced patterns, menus and active widgets) instead of a fixed page list; stops reading rendered page content; past recurring-event instances match by link only; titles match across HTML tags; links must start at a path boundary; the daily job can't send twice; refreshing after a send doesn't resend; the preview runs only when asked for.
