@@ -66,6 +66,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.5.1:** the email marks hits from the Avia builder's stored copy ("[Avia builder data]"), so a link the page no longer shows can be traced.
 - **1.5.0:** scans only the pages in `FRP_WATCH_PAGES` again (plus menus and widgets), instead of every post and page; pages that can't be found are listed in the email. Link detection from 1.4.0 is unchanged.
 - **1.4.1:** titles of past events are searched for 30 days after they end (was 14).
 - **1.4.0:** finds links to past events however long ago they ended (before, only events that ended in the last 14 days were checked), plus Avia internal links that store an event ID instead of a URL, and links to unpublished or deleted events; element names ignore buttons and images that come before a link but don't contain it.

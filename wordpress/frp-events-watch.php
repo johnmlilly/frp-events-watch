@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon and past events still mentioned on key pages. Read-only; never edits content.
- * Version: 1.5.0
+ * Version: 1.5.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -251,12 +251,14 @@ function frp_watch_find($titles, $pages) {
     $hits = [];
     foreach (frp_watch_places($pages) as $place) {
         $found = [];
-        foreach ($place['sources'] as $text) {
+        foreach ($place['sources'] as $source => $text) {
+            // Say when a hit comes from the builder's stored copy, which can hold links the page no longer shows.
+            $from = $source === 'Avia builder data' ? " [$source]" : '';
             // Block attributes can store URLs with escaped slashes.
             $text = str_replace('\/', '/', $text);
             $here = [];
             foreach (frp_watch_refs($text) as [$key, $at]) {
-                $here[$key][] = frp_watch_element($text, $at, 'link');
+                $here[$key][] = frp_watch_element($text, $at, 'link') . $from;
             }
             // Titles are searched with HTML tags turned into spaces, so "<strong>Retreat</strong> 2026"
             // reads "retreat 2026". Shortcodes survive, so the element around a title can still be named.
@@ -264,7 +266,7 @@ function frp_watch_find($titles, $pages) {
             foreach ($titles as $key => $re) {
                 if (preg_match_all($re, $norm, $m, PREG_OFFSET_CAPTURE)) {
                     foreach ($m[0] as [, $at]) {
-                        $here[$key][] = frp_watch_element($norm, $at, 'title');
+                        $here[$key][] = frp_watch_element($norm, $at, 'title') . $from;
                     }
                 }
             }
