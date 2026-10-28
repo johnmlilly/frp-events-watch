@@ -7,19 +7,35 @@ on:
   pull_request:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    strategy:
+      matrix:
+        php: ['7.4', '8.3']
     steps:
       - uses: actions/checkout@v7
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '7.4'
+          php-version: ${{ matrix.php }}
+          coverage: none
 
       - name: Lint
         run: php -l wordpress/frp-events-watch.php
+
+      - name: Install test tools
+        run: composer install --no-interaction --no-progress
+
+      - name: Unit tests
+        run: vendor/bin/phpunit
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
 
       - name: Read plugin version
         id: v
