@@ -88,6 +88,15 @@ class ReportTest extends FrpTestCase {
         $this->assertSame(['Link'], $soon[0]['pages']['/']['how']);
     }
 
+    public function test_event_today_is_listed_though_yesterdays_window_covered_it() {
+        // Yesterday's report ran late, so its window reached 2h past today's run.
+        $this->fetched = [$this->event(310, 'Today Event', '/event/today/', 1, 3),
+                          $this->event(311, 'Started Today', '/event/started/', -2, 1),
+                          $this->event(312, 'Started Yesterday', '/event/yesterday/', -20, 5)];
+        $soon = $this->section(frp_watch_report(self::NOW, self::NOW + 2 * HOUR_IN_SECONDS), 'soon');
+        $this->assertSame(['Started Today', 'Today Event'], array_column($soon, 'title'));
+    }
+
     public function test_past_title_is_searched_within_the_lookback() {
         $this->fetched = [$this->event(301, 'Fall Picnic', '/event/fall-picnic/', -29 * 24 - 2, -29 * 24)];
         $this->addPage(1, 'home', 'Thanks for coming to the Fall Picnic!');
