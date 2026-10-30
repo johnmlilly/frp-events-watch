@@ -86,6 +86,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.8.1:** an event on today's date is always listed under "Starting within 24 hours", even if the previous day's report already showed it.
 - **1.8.0:** new sections: upcoming events in the next 30 days that aren't on any tracked page, and possible duplicate events (same title, same day). A missing graphic is urgent within 7 days of the event. Items can be dismissed from the email (restore them on the Tools page).
 - **1.7.0:** new "Missing a graphic" section lists upcoming events with no image in their description, only a placeholder image, or an image hosted on another site. Reports can go to several addresses (comma-separated).
 - **1.6.1:** ignores Avia leftovers the page never shows: matches inside an image element with no image, and in `link_dynamic` (or any `*_dynamic` setting) when `link` is empty. These were reported as "Image link" on pages with nothing visible to remove.

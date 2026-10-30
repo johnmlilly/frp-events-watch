@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon, past events still mentioned on key pages, upcoming events missing their graphic or not on any key page, and possible duplicates. Read-only; never edits content.
- * Version: 1.8.0
+ * Version: 1.8.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
