@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon, past events still mentioned on key pages, upcoming events missing their graphic or not on any key page, and possible duplicates. Read-only; never edits content.
- * Version: 1.8.0
+ * Version: 1.8.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -471,7 +471,8 @@ function frp_watch_soon_from($now) {
 }
 
 /**
- * Soon = starts after $soon_from and within FRP_WATCH_SOON_HOURS of now, and hasn't ended yet.
+ * Soon = starts after $soon_from (or today, site time) and within FRP_WATCH_SOON_HOURS of now, and
+ * hasn't ended yet. An event on today's date is listed even if yesterday's report already did.
  * @return array ['subject', 'summary', 'sections', 'quiet', 'complete', 'hidden']. quiet is true when there
  *               is nothing to report; complete is false when events could not be read; hidden lists the IDs
  *               of dismissed items left out.
@@ -496,6 +497,8 @@ function frp_watch_report($now, $soon_from) {
             $live[frp_watch_norm($e['title'])] = true;
         }
     }
+    $today = (new DateTimeImmutable('@' . $now))->setTimezone(wp_timezone())->setTime(0, 0)->getTimestamp();
+    $soon_from = min($soon_from, $today - 1);
     $soon = array_filter($fetched, function ($e) use ($now, $soon_from, $soon_until) {
         return $e['start'] > $soon_from && $e['start'] <= $soon_until && $e['end'] >= $now;
     });
