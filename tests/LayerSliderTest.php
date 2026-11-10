@@ -49,7 +49,7 @@ class LayerSliderTest extends FrpTestCase {
         $this->slider(3, [$this->slide(''), $this->slide('https://www.familyrenewalproject.com/event/retreat/')]);
         $this->addPage(1, 'home', '[layerslider id="3"]');
         $hits = frp_watch_find([], [1 => '/']);
-        $this->assertSame(['LayerSlider "Home", slide 2: Link'], $hits['retreat']['/']['how']);
+        $this->assertSame(['Home page slider, slide 2: Link'], $hits['retreat']['/']['how']);
     }
 
     public function test_avia_element_and_slug() {
@@ -70,7 +70,16 @@ class LayerSliderTest extends FrpTestCase {
         $this->addPage(1, 'home', '[layerslider id="3"]');
         $hits = frp_watch_find(['prayer-night' => frp_watch_title_re('Prayer Night')], [1 => '/']);
         $this->assertArrayHasKey('lcw-marian-paint-by-number', $hits);
-        $this->assertSame(['LayerSlider "Home", slide 1: Text (title)'], $hits['prayer-night']['/']['how']);
+        $this->assertSame(['Home page slider, slide 1: Text (title)'], $hits['prayer-night']['/']['how']);
+    }
+
+    public function test_names_each_slider_when_a_page_has_several() {
+        $this->slider(3, [$this->slide('/event/retreat/')]);
+        $this->slider(4, [$this->slide('/event/retreat/')], 'Events', 'events');
+        $this->addPage(2, 'lgw', '[layerslider id="3"][layerslider id="4"]');
+        $hits = frp_watch_find([], [2 => '/lgw/']);
+        $this->assertSame(['/lgw/ page slider "Home", slide 1: Link', '/lgw/ page slider "Events", slide 1: Link'],
+                          $hits['retreat']['/lgw/']['how']);
     }
 
     public function test_skips_hidden_slides_and_layers() {

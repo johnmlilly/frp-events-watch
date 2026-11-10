@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon, past events still mentioned on key pages, upcoming events missing their graphic or not on any key page, and possible duplicates. Read-only; never edits content.
- * Version: 1.9.0
+ * Version: 1.9.1
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -186,7 +186,7 @@ function frp_watch_pages() {
 function frp_watch_places($pages) {
     foreach ($pages as $id => $path) {
         $content = get_post($id)->post_content;
-        $sources = ['content' => $content] + frp_watch_layersliders($content);
+        $sources = ['content' => $content] + frp_watch_layersliders($content, $path);
         yield ['label' => $path, 'url' => home_url($path), 'sources' => $sources];
     }
 
@@ -233,9 +233,11 @@ function frp_watch_places($pages) {
  * each visible slide is read from there: every text and link in the slide and its layers, plus
  * links that pick a post by ID (linkId), written as "tribe_events,ID" for frp_watch_refs().
  * Hidden slides and hidden layers are skipped; deleted sliders are ignored.
- * @return array source name ('LayerSlider "Home", slide 2') => text
+ * @param string $path the page's path in FRP_WATCH_PAGES
+ * @return array "slider:" + where it is ('Home page slider, slide 2') => text. A page with more
+ *               than one slider names each: 'Home page slider "Events", slide 2'.
  */
-function frp_watch_layersliders($content) {
+function frp_watch_layersliders($content, $path) {
     global $wpdb;
     $ids = [];
     if (preg_match_all('/\[(?:av_)?layerslider\b[^\]]*?\bid=([\'"]?)([\w-]+)\1/i', $content, $m)) {
@@ -252,8 +254,10 @@ function frp_watch_layersliders($content) {
     if (!$ids || !isset($wpdb)) {
         return [];
     }
+    $ids = array_unique($ids);
+    $where = ($path === '/' ? 'Home page' : "$path page") . ' slider';
     $sources = [];
-    foreach (array_unique($ids) as $sid) {
+    foreach ($ids as $sid) {
         $suppress = $wpdb->suppress_errors(true);
         $row = $wpdb->get_row($wpdb->prepare(
             "SELECT name, data FROM {$wpdb->prefix}layerslider WHERE (id = %d OR slug = %s) AND flag_deleted = 0 LIMIT 1",
@@ -283,7 +287,8 @@ function frp_watch_layersliders($content) {
                     $text .= $v . "\n";
                 }
             });
-            $sources['LayerSlider "' . $name . '", slide ' . ($i + 1)] = $text;
+            $slider = count($ids) > 1 ? "$where \"$name\"" : $where;
+            $sources["slider:$slider, slide " . ($i + 1)] = $text;
         }
     }
     return $sources;
@@ -369,8 +374,8 @@ function frp_watch_find($titles, $pages) {
     foreach (frp_watch_places($pages) as $place) {
         $found = [];
         foreach ($place['sources'] as $source => $text) {
-            // Slider slides are named in "how": 'LayerSlider "Home", slide 2: Link'.
-            $in = strpos($source, 'LayerSlider ') === 0 ? "$source: " : '';
+            // Slider slides are named in "how": 'Home page slider, slide 2: Link'.
+            $in = strpos($source, 'slider:') === 0 ? substr($source, 7) . ': ' : '';
             // Block attributes can store URLs with escaped slashes.
             $text = str_replace('\/', '/', $text);
             $here = [];
