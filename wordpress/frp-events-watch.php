@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FRP Events Watch
  * Description: Daily email listing events that start soon, past events still mentioned on key pages, upcoming events missing their graphic or not on any key page, and possible duplicates. Read-only; never edits content.
- * Version: 1.8.1
+ * Version: 1.9.0
  * Requires PHP: 7.4
  * Author: John Lilly
  * Author URI: https://johnlilly.dev
@@ -185,7 +185,8 @@ function frp_watch_pages() {
  */
 function frp_watch_places($pages) {
     foreach ($pages as $id => $path) {
-        $sources = ['content' => get_post($id)->post_content];
+        $content = get_post($id)->post_content;
+        $sources = ['content' => $content] + frp_watch_layersliders($content);
         yield ['label' => $path, 'url' => home_url($path), 'sources' => $sources];
     }
 
@@ -224,6 +225,74 @@ function frp_watch_places($pages) {
                    'sources' => ['widgets' => $text]];
         }
     }
+}
+
+/**
+ * The LayerSlider sliders a page shows ([layerslider id="1"], Avia's [av_layerslider id='1'], or the
+ * block editor's LayerSlider block). Sliders live in LayerSlider's own table, not in the page, so
+ * each visible slide is read from there: every text and link in the slide and its layers, plus
+ * links that pick a post by ID (linkId), written as "tribe_events,ID" for frp_watch_refs().
+ * Hidden slides and hidden layers are skipped; deleted sliders are ignored.
+ * @return array source name ('LayerSlider "Home", slide 2') => text
+ */
+function frp_watch_layersliders($content) {
+    global $wpdb;
+    $ids = [];
+    if (preg_match_all('/\[(?:av_)?layerslider\b[^\]]*?\bid=([\'"]?)([\w-]+)\1/i', $content, $m)) {
+        $ids = $m[2];
+    }
+    if (preg_match_all('#<!--\s*wp:[\w-]+/layerslider\w*\s+(\{.*?\})\s*/?-->#is', $content, $m)) {
+        foreach ($m[1] as $json) {
+            $attrs = json_decode($json, true);
+            if (isset($attrs['id']) && is_scalar($attrs['id'])) {
+                $ids[] = (string) $attrs['id'];
+            }
+        }
+    }
+    if (!$ids || !isset($wpdb)) {
+        return [];
+    }
+    $sources = [];
+    foreach (array_unique($ids) as $sid) {
+        $suppress = $wpdb->suppress_errors(true);
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT name, data FROM {$wpdb->prefix}layerslider WHERE (id = %d OR slug = %s) AND flag_deleted = 0 LIMIT 1",
+            ctype_digit($sid) ? (int) $sid : 0, $sid));
+        $wpdb->suppress_errors($suppress);
+        $data = $row ? json_decode($row->data, true) : null;
+        if (!is_array($data)) {
+            continue;
+        }
+        $name = trim((string) $row->name) !== '' ? $row->name : "#$sid";
+        foreach ($data['layers'] ?? [] as $i => $slide) {
+            if (!is_array($slide) || frp_watch_ls_hidden($slide['properties'] ?? [])) {
+                continue;
+            }
+            $parts = [$slide['properties'] ?? []];
+            foreach ($slide['sublayers'] ?? [] as $layer) {
+                if (is_array($layer) && !frp_watch_ls_hidden($layer)) {
+                    $parts[] = $layer;
+                }
+            }
+            $text = '';
+            array_walk_recursive($parts, function ($v, $k) use (&$text) {
+                if (is_string($k) && preg_match('/linkid$/i', $k) && is_numeric($v)) {
+                    $p = get_post((int) $v);
+                    $text .= $p && $p->post_type === 'tribe_events' ? 'tribe_events,' . (int) $v . "\n" : '';
+                } elseif (is_string($v)) {
+                    $text .= $v . "\n";
+                }
+            });
+            $sources['LayerSlider "' . $name . '", slide ' . ($i + 1)] = $text;
+        }
+    }
+    return $sources;
+}
+
+/** Whether a LayerSlider slide or layer is hidden ("skip" on). */
+function frp_watch_ls_hidden($props) {
+    $skip = $props['skip'] ?? false;
+    return $skip === true || $skip === 1 || $skip === '1' || $skip === 'true' || $skip === 'on';
 }
 
 /** The events' single-event URL base, "event" unless changed in The Events Calendar's settings. */
@@ -299,13 +368,15 @@ function frp_watch_find($titles, $pages) {
     $hits = [];
     foreach (frp_watch_places($pages) as $place) {
         $found = [];
-        foreach ($place['sources'] as $text) {
+        foreach ($place['sources'] as $source => $text) {
+            // Slider slides are named in "how": 'LayerSlider "Home", slide 2: Link'.
+            $in = strpos($source, 'LayerSlider ') === 0 ? "$source: " : '';
             // Block attributes can store URLs with escaped slashes.
             $text = str_replace('\/', '/', $text);
             $here = [];
             foreach (frp_watch_refs($text) as [$key, $at]) {
                 if (!frp_watch_unused($text, $at)) {
-                    $here[$key][] = frp_watch_element($text, $at, 'link');
+                    $here[$key][] = $in . frp_watch_element($text, $at, 'link');
                 }
             }
             // Titles are searched with HTML tags turned into spaces, so "<strong>Retreat</strong> 2026"
@@ -315,7 +386,7 @@ function frp_watch_find($titles, $pages) {
                 if (preg_match_all($re, $norm, $m, PREG_OFFSET_CAPTURE)) {
                     foreach ($m[0] as [, $at]) {
                         if (!frp_watch_unused($norm, $at)) {
-                            $here[$key][] = frp_watch_element($norm, $at, 'title');
+                            $here[$key][] = $in . frp_watch_element($norm, $at, 'title');
                         }
                     }
                 }
