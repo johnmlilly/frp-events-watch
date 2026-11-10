@@ -86,6 +86,7 @@ Change `FRP_WATCH_PAGES` and the plugin name in the header comment. If you insta
 
 ## Changelog
 
+- **1.9.1:** slider places in the email read `Home page slider, slide 2: Link` (the slider's name is added only when a page has more than one).
 - **1.9.0:** reads LayerSlider sliders on tracked pages (`[layerslider]`, Avia's LayerSlider element, or the LayerSlider block), so event links and titles on the home page slides are checked. Each visible slide is read from LayerSlider's own table; hidden slides and layers are skipped. The email names the slider and slide, e.g. `LayerSlider "Home", slide 2: Link`.
 - **1.8.1:** an event on today's date is always listed under "Starting within 24 hours", even if the previous day's report already showed it.
 - **1.8.0:** new sections: upcoming events in the next 30 days that aren't on any tracked page, and possible duplicate events (same title, same day). A missing graphic is urgent within 7 days of the event. Items can be dismissed from the email (restore them on the Tools page).
